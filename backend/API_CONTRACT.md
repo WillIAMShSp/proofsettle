@@ -81,18 +81,18 @@ this table, but the backend enforces both.
 |------|--------------------|---------------|----------|
 | 20 | `STEPS` | the first 6 statuses | **Stays client-side.** Pure presentation, derived from `STATUSES`. |
 | 50, 69 | stepper slot 5 shows `Disputed`/`Resolved` | logic | Stays client-side. |
-| 21 | `CREDIT` | `100` | `agreement.creditPerDefect` |
+| 21 | `CREDIT` | `100` | `agreement.terms.compensation.amountPerUnit` |
 | 22–27 | `findings` | 4 items (see below) | `inspection.findings` |
-| 23–26 | `confirmed` flags | hand-set booleans | `finding.confirmed`, computed server-side as `confidence >= agreement.confidenceThreshold` unless a human reviewer overrides it |
-| 145 | "≥ 85% confidence" | `0.85` | `agreement.confidenceThreshold` |
+| 23–26 | `confirmed` flags | hand-set booleans | `finding.confirmed`, computed server-side as `confidence >= agreement.terms.acceptance.minConfidence` and type in `agreement.terms.acceptance.defectTypes`, unless a human reviewer overrides it |
+| 145 | "≥ 85% confidence" | `0.85` | `agreement.terms.acceptance.minConfidence` |
 | 48 | `defects` | `findings.filter(confirmed).length` = 3 | `adjustment.confirmedDefects` |
 | 49 | `adj` | `defects * CREDIT` = 300 | `adjustment.amount` |
 | 141 | settlement | `s.amount - adj` = 9,700 | `adjustment.settlementAmount` |
 | 147 | "would rise to `adj + CREDIT`" | 400 | `adjustment.amountIfReviewedConfirmed` |
-| 87 | Goods | `"100 machined metal components"` (differs from `title` "100 metal components") | `agreement.goods` |
+| 87 | Goods | `"100 machined metal components"` (differs from `title` "100 metal components") | `agreement.terms.quantity` + `agreement.terms.itemDescription` |
 | 92–94 | approval badges | both always "approved" | `agreement.buyerApproved`, `agreement.supplierApproved` |
 | 99, 5–6 | evidence images | `dispatch.jpg` / `receipt.jpg` assets, 4 each | `evidence[].url`, grouped by `evidence[].kind` |
-| 103 | photos per group | `[0, 1, 2, 3]` | `evidence.length` per kind |
+| 103 | photos per group | `[0, 1, 2, 3]` | `evidence.length` per kind; minimums in `agreement.terms.evidenceRequirements` |
 | 107 | evidence hash | `hashOf(label + n)` (fake) | `evidence[].sha256` |
 | 108 | "Verified" check | always shown | `evidence[].verified` (from the last verify run; `null` = never checked) |
 | 145 | Assumptions list | 3 strings | `adjustment.assumptions` |
@@ -121,6 +121,55 @@ Current mock findings, which become the seeded inspection for `PS-1042`:
 Seed data from `store.tsx` to replicate: `PS-1042` (Proposed, 7 events), `PS-1038`
 (In Transit, 40 hydraulic valves, $6,400, Kestrel Fluid Systems), `PS-1031` (Resolved,
 250 steel brackets, $3,750). All buyers are Northgate Assembly Ltd.
+
+## Agreement terms (rules DSL)
+
+`AgreementTerms` in `backend/app/terms.py`. This is the PS-1042 seed from `backend/app/seed.py`:
+
+```json
+{
+  "itemDescription": "Machined metal component",
+  "quantity": 100,
+  "unitPrice": 100,
+  "invoiceAmount": 10000,
+  "evidenceRequirements": {
+    "minDispatchPhotos": 4,
+    "minReceiptPhotos": 4,
+    "inspectionWindowHours": 48
+  },
+  "acceptance": {
+    "defectTypes": ["bend", "crack", "deep_scratch", "discoloration"],
+    "minConfidence": 0.85,
+    "defectToleranceUnits": 0
+  },
+  "compensation": {
+    "type": "per_defective_unit",
+    "amountPerUnit": 100,
+    "maxCredit": 10000
+  }
+}
+```
+
+Validation (any failure → `422`):
+
+- All money fields are `> 0`, with at most 2 decimal places and 12 digits.
+- `invoiceAmount` must equal `quantity × unitPrice` exactly (Decimal math).
+- `compensation.maxCredit` must be `≤ invoiceAmount`.
+- `quantity`, `minDispatchPhotos`, `minReceiptPhotos` and `inspectionWindowHours` must be `≥ 1`.
+- `minConfidence` is in `(0, 1]`. It is a probability, not money, so it is a float.
+- `defectTypes` must be non-empty, unique, lowercase snake_case slugs.
+- `0 ≤ defectToleranceUnits ≤ quantity`.
+- Unknown fields are rejected at every level, and terms are immutable once parsed.
+
+Meanings:
+
+- `defectToleranceUnits` is the number of confirmed defective units the buyer accepts
+  without credit.
+- `inspectionWindowHours` is counted from receipt.
+- `compensation.type` is a discriminator: `"per_defective_unit"` is the only rule type
+  today, and new rule types get their own `type` value. For PS-1042, the adjustment is
+  `min(max(0, confirmed − tolerance) × amountPerUnit, maxCredit)` = `3 × $100` = `$300`.
+  That formula is a proposal for the settlement engine, which is not built yet.
 
 ## Endpoints and JSON shapes
 
@@ -164,10 +213,7 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
   "disputeReason": null,
 
   "agreement": {
-    "goods": "100 machined metal components",
-    "quantity": 100,
-    "creditPerDefect": 100,
-    "confidenceThreshold": 0.85,
+    "terms": { "...": "AgreementTerms, see below" },
     "buyerApproved": true,
     "supplierApproved": true,
     "termsHash": "<sha256>"
