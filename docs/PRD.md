@@ -58,7 +58,7 @@ Use AI to identify visible damage and extract relevant information from supporti
 
 Generate an explainable financial adjustment using deterministic contract rules.
 
-Allow the supplier to accept, reject, or dispute the proposal.
+Allow both parties to accept or dispute the proposal, with a Reviewer resolving disputes.
 
 Record important events and evidence hashes in a tamper-evident audit trail.
 
@@ -302,7 +302,7 @@ Inspection results.
 
 Settlement review.
 
-Supplier approval and dispute workflows.
+Buyer and supplier approval, dispute, and Reviewer resolution workflows.
 
 Audit history.
 
@@ -592,7 +592,7 @@ Test the complete workflow.
 
 Hours 24–36: Differentiation
 
-Integrate the test smart contract.
+Integrate the Solana program.
 
 Record evidence hashes.
 
