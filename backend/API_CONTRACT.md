@@ -8,15 +8,20 @@ Sections marked **Proposed** are not implemented yet and are open for review.
 
 - JSON keys are **camelCase** to match the TypeScript types (`disputeReason`, not
   `dispute_reason`). Python code stays snake_case; Pydantic aliases do the mapping.
-- Money is a JSON **number in whole currency units (USD)**, matching `amount: 10000` in the
-  frontend. The backend stores it as `NUMERIC(12,2)` and never accepts an adjustment amount
-  from the client: it always recomputes from stored agreement terms.
+- Money is a JSON **number in dollars (USD)**, matching `amount: 10000` in the frontend,
+  with at most 2 decimal places. Inside the backend it is `Decimal` end to end: DB columns
+  are `NUMERIC(12,2)`, Pydantic fields are `Decimal`, and all money math is `Decimal`.
+  Floats never take part in money math. The only conversion is at the JSON boundary, where
+  a `Decimal` is written out as a number. The backend never accepts an adjustment amount
+  from the client: it always recomputes it from stored agreement terms.
 - Timestamps are **ISO 8601 UTC** (`"2026-10-09T10:12:00Z"`). The frontend currently stores
   pre-formatted strings (`"Oct 09, 10:12"`, `"Just now"`); it should format `at` itself.
 - Hashes are **lowercase hex SHA-256** (64 chars). The frontend's `hashOf` is a fake
   FNV-based function that also yields 64 hex chars, so `short()` keeps working unchanged.
-- Caller role, until real auth exists: header `X-Demo-Role: Buyer | Supplier` (mirrors the
-  fake login). The backend validates role on every write.
+- Caller role, until real auth exists: header `X-Demo-Role: Buyer | Supplier | Reviewer`
+  (mirrors the fake login). The backend validates role on every write. `Reviewer` is a
+  neutral third party who resolves disputes. The frontend's `Role` type and login screen
+  don't have it yet.
 
 ## Types (verbatim from `src/lib/store.tsx`)
 
@@ -33,7 +38,7 @@ export type Shipment = {
 
 `AuditEvent.actor` is free text today; seeded values are `"Buyer"`, `"Supplier"`, `"System"`,
 `"AI"`, and `log()` falls back to `"User"`. The API restricts it to
-`"Buyer" | "Supplier" | "System" | "AI"`.
+`"Buyer" | "Supplier" | "Reviewer" | "System" | "AI"`.
 
 ## The 8 statuses
 
@@ -52,7 +57,7 @@ Exact strings, including the space and capitalisation in `"In Transit"`:
 
 Allowed transitions (PRD §9), as implemented in `backend/app/workflow.py`:
 
-| From         | To           | Who may trigger (**Proposed**)          |
+| From         | To           | Who may trigger                          |
 |--------------|--------------|------------------------------------------|
 | `Draft`      | `Agreed`     | System, once both parties have approved  |
 | `Agreed`     | `In Transit` | Supplier (dispatch evidence uploaded)    |
@@ -60,9 +65,13 @@ Allowed transitions (PRD §9), as implemented in `backend/app/workflow.py`:
 | `Inspection` | `Proposed`   | System (rules engine)                    |
 | `Proposed`   | `Accepted`   | Supplier                                 |
 | `Proposed`   | `Disputed`   | Supplier, reason required                |
-| `Disputed`   | `Resolved`   | Buyer or Supplier                        |
+| `Disputed`   | `Resolved`   | Reviewer only                            |
 
-`Accepted` and `Resolved` are terminal. Any other transition is rejected with `409`.
+`Accepted` and `Resolved` are terminal. Any other transition is rejected with `409`. A
+role outside the "Who may trigger" column gets `403`. For example, Buyer or Supplier
+resolving a dispute gets `403`, because neither party may resolve its own dispute. There is
+no `Disputed → Proposed` path: a disputed proposal cannot be revised and re-proposed, and
+the only way out of `Disputed` is a Reviewer moving it to `Resolved`.
 The frontend's Supplier-only Accept/Dispute buttons and its "reason required" check match
 this table, but the backend enforces both.
 
@@ -218,6 +227,7 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
 }
 ```
 
+`actions.canResolve` is true only for a Reviewer on a `Disputed` shipment.
 `evidence[].kind` is `"dispatch" | "receipt"`; the UI's "Dispatch photos" / "Receipt photos"
 headings map to these. `actions` is computed for the caller's `X-Demo-Role` from the
 transition table. `events[].txHash` is set only when the event was anchored on-chain.

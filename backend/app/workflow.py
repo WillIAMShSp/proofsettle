@@ -20,11 +20,13 @@ class Status(StrEnum):
 class Actor(StrEnum):
     BUYER = "Buyer"
     SUPPLIER = "Supplier"
+    REVIEWER = "Reviewer"
     SYSTEM = "System"
     AI = "AI"
 
 
-# (from, to) -> actors allowed to trigger it.
+# (from, to) -> actors allowed to trigger it. There is deliberately no
+# Disputed -> Proposed path: a dispute ends only in Resolved.
 TRANSITIONS: dict[tuple[Status, Status], frozenset[Actor]] = {
     (Status.DRAFT, Status.AGREED): frozenset({Actor.SYSTEM}),
     (Status.AGREED, Status.IN_TRANSIT): frozenset({Actor.SUPPLIER}),
@@ -32,7 +34,8 @@ TRANSITIONS: dict[tuple[Status, Status], frozenset[Actor]] = {
     (Status.INSPECTION, Status.PROPOSED): frozenset({Actor.SYSTEM}),
     (Status.PROPOSED, Status.ACCEPTED): frozenset({Actor.SUPPLIER}),
     (Status.PROPOSED, Status.DISPUTED): frozenset({Actor.SUPPLIER}),
-    (Status.DISPUTED, Status.RESOLVED): frozenset({Actor.BUYER, Actor.SUPPLIER}),
+    # Neither party may resolve its own dispute.
+    (Status.DISPUTED, Status.RESOLVED): frozenset({Actor.REVIEWER}),
 }
 
 REASON_REQUIRED: frozenset[Status] = frozenset({Status.DISPUTED})

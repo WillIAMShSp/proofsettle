@@ -37,7 +37,24 @@ def test_happy_path():
 
 def test_dispute_path():
     s = transition(Status.PROPOSED, Status.DISPUTED, Actor.SUPPLIER, reason="Defects predate dispatch")
-    assert transition(s, Status.RESOLVED, Actor.BUYER) is Status.RESOLVED
+    assert transition(s, Status.RESOLVED, Actor.REVIEWER) is Status.RESOLVED
+
+
+@pytest.mark.parametrize("actor", [a for a in Actor if a is not Actor.REVIEWER])
+def test_only_reviewer_resolves(actor):
+    with pytest.raises(NotPermitted):
+        transition(Status.DISPUTED, Status.RESOLVED, actor)
+
+
+def test_reviewer_cannot_decide_proposals():
+    for target in (Status.ACCEPTED, Status.DISPUTED):
+        assert not can_transition(Status.PROPOSED, target, Actor.REVIEWER)
+
+
+def test_disputed_only_leads_to_resolved():
+    assert next_statuses(Status.DISPUTED) == [Status.RESOLVED]
+    with pytest.raises(IllegalTransition):
+        transition(Status.DISPUTED, Status.PROPOSED, Actor.SYSTEM)
 
 
 @pytest.mark.parametrize("reason", [None, "", "   "])
