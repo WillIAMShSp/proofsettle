@@ -83,11 +83,12 @@ this table, but the backend enforces both.
 | 50, 69 | stepper slot 5 shows `Disputed`/`Resolved` | logic | Stays client-side. |
 | 21 | `CREDIT` | `100` | `agreement.terms.compensation.amountPerUnit` |
 | 22–27 | `findings` | 4 items (see below) | `inspection.findings` |
-| 23–26 | `confirmed` flags | hand-set booleans | `finding.confirmed`, computed server-side as `confidence >= agreement.terms.acceptance.minConfidence` and type in `agreement.terms.acceptance.defectTypes`, unless a human reviewer overrides it |
+| 23–26 | `confirmed` flags | hand-set booleans | Which list the finding is in: `adjustment.counted`, `adjustment.excluded` or `adjustment.needsReview` (see Settlement engine) |
 | 145 | "≥ 85% confidence" | `0.85` | `agreement.terms.acceptance.minConfidence` |
 | 48 | `defects` | `findings.filter(confirmed).length` = 3 | `adjustment.confirmedDefects` |
-| 49 | `adj` | `defects * CREDIT` = 300 | `adjustment.amount` |
-| 141 | settlement | `s.amount - adj` = 9,700 | `adjustment.settlementAmount` |
+| 49 | `adj` | `defects * CREDIT` = 300 | `adjustment.credit` |
+| 140 | rule line | `{defects} confirmed defects × ${CREDIT} = ${adj}` | `adjustment.appliedRule.credit` |
+| 141 | settlement | `s.amount - adj` = 9,700 | `adjustment.settlementAmount`; the line is `adjustment.appliedRule.settlement` |
 | 147 | "would rise to `adj + CREDIT`" | 400 | `adjustment.amountIfReviewedConfirmed` |
 | 87 | Goods | `"100 machined metal components"` (differs from `title` "100 metal components") | `agreement.terms.quantity` + `agreement.terms.itemDescription` |
 | 92–94 | approval badges | both always "approved" | `agreement.buyerApproved`, `agreement.supplierApproved` |
@@ -96,7 +97,7 @@ this table, but the backend enforces both.
 | 107 | evidence hash | `hashOf(label + n)` (fake) | `evidence[].sha256` |
 | 108 | "Verified" check | always shown | `evidence[].verified` (from the last verify run; `null` = never checked) |
 | 145 | Assumptions list | 3 strings | `adjustment.assumptions` |
-| 147 | Uncertainty list | 2 strings, `#063` hard-coded | `adjustment.uncertainty` |
+| 147 | Uncertainty list | 2 strings, `#063` hard-coded | Built from `adjustment.needsReview` and `adjustment.amountIfReviewedConfirmed` |
 | 152 | decision shown when `Accepted`/`Disputed` | status check | `status`, plus `actions` (below) |
 | 157 | `role === "Supplier"` to show buttons | client role check | `actions.canAccept`, `actions.canDispute` |
 | 52 | event `at: "Just now"` | literal | server timestamp |
@@ -111,12 +112,15 @@ where" note, page `head` meta) stays in the frontend.
 
 Current mock findings, which become the seeded inspection for `PS-1042`:
 
-| item | issue | confidence | confirmed |
-|------|-------|-----------:|-----------|
-| Component #017 | Bent flange | 0.94 | true |
-| Component #042 | Surface crack near bore | 0.91 | true |
-| Component #078 | Deep scratch on mating face | 0.88 | true |
-| Component #063 | Possible discoloration | 0.52 | false (needs review) |
+| id | unitRef | description | defectType | confidence | outcome |
+|----|---------|-------------|------------|-----------:|---------|
+| `fnd_01` | Component #017 | Bent flange | `bend` | 0.94 | counted |
+| `fnd_02` | Component #042 | Surface crack near bore | `crack` | 0.91 | counted |
+| `fnd_03` | Component #078 | Deep scratch on mating face | `deep_scratch` | 0.88 | counted |
+| `fnd_04` | Component #063 | Possible discoloration | `discoloration` | 0.52 | needs review |
+
+These are `PS_1042_FINDINGS` in `backend/app/seed.py`. None is present at dispatch and none
+has been reviewed.
 
 Seed data from `store.tsx` to replicate: `PS-1042` (Proposed, 7 events), `PS-1038`
 (In Transit, 40 hydraulic valves, $6,400, Kestrel Fluid Systems), `PS-1031` (Resolved,
@@ -169,7 +173,79 @@ Meanings:
 - `compensation.type` is a discriminator: `"per_defective_unit"` is the only rule type
   today, and new rule types get their own `type` value. For PS-1042, the adjustment is
   `min(max(0, confirmed − tolerance) × amountPerUnit, maxCredit)` = `3 × $100` = `$300`.
-  That formula is a proposal for the settlement engine, which is not built yet.
+  See Settlement engine below.
+
+## Findings
+
+`Finding` in `backend/app/findings.py`:
+
+```json
+{
+  "id": "fnd_04",
+  "unitRef": "Component #063",
+  "defectType": "discoloration",
+  "confidence": 0.52,
+  "evidenceIds": ["ev_08"],
+  "description": "Possible discoloration",
+  "presentInDispatch": false,
+  "reviewOverride": null,
+  "reviewedBy": null,
+  "reviewedAt": null
+}
+```
+
+- `confidence` is the AI's confidence in `[0, 1]`, as a float.
+- `defectType` uses the same slug format as `acceptance.defectTypes`.
+- `evidenceIds` must be non-empty.
+- `presentInDispatch` is true when the defect is already visible in the dispatch photos.
+- `reviewOverride` is `"confirmed" | "rejected" | null`. It, `reviewedBy` and `reviewedAt`
+  are set together or not at all. `reviewedBy` must be `"Reviewer"`, and `reviewedAt` is an
+  ISO 8601 timestamp with a timezone.
+
+## Settlement engine
+
+`compute_adjustment(terms, findings)` in `backend/app/settlement.py` is a pure function. It
+does no I/O, makes no AI calls, does not read the clock and uses only `Decimal` for money.
+Each finding lands in exactly one list. The rules are checked in this order:
+
+| # | Condition | List | `reason` |
+|---|-----------|------|----------|
+| 1 | `reviewOverride == "rejected"` | `excluded` | `review_rejected` |
+| 2 | `reviewOverride == "confirmed"` | `counted` | `review_confirmed` |
+| 3 | `defectType` not in `acceptance.defectTypes` | `excluded` | `defect_type_not_covered` |
+| 4 | `presentInDispatch` | `excluded` | `present_in_dispatch` |
+| 5 | `confidence < acceptance.minConfidence` | `needsReview` | `below_confidence` |
+| 6 | otherwise | `counted` | `meets_threshold` |
+
+- A rejection always wins. A Reviewer's confirmation counts a finding even if rules 3–5
+  would have kept it out.
+- Rules 3 and 4 come before rule 5. A low-confidence finding of an uncovered type, or one
+  already present at dispatch, is excluded rather than sent to review. So `needsReview` only
+  holds findings that would count if a Reviewer confirmed them.
+- Needs-review findings are never counted.
+- Credit is per defective **unit**. Several counted findings with the same `unitRef` count
+  once, so `confirmedDefects` is the number of distinct units in `counted`.
+- `credit = min(max(0, confirmedDefects − defectToleranceUnits) × amountPerUnit, maxCredit)`
+- `settlementAmount = invoiceAmount − credit`
+- `amountIfReviewedConfirmed` uses the same formula, counting the units in both `counted`
+  and `needsReview`. It equals `credit` when `needsReview` is empty.
+- `status` is `"needs_review"` if `needsReview` is non-empty, otherwise `"ready"`.
+
+**Needs-review findings do not block `Inspection → Proposed`.** The engine proposes the
+credit from counted findings only, which is the lowest credit the evidence supports. The
+pending findings and `amountIfReviewedConfirmed` are shown next to it, as the frontend does
+today with $300 proposed and #063 flagged. `status` is a hint for the UI, not a gate.
+
+`appliedRule.credit` takes one of these forms:
+
+| Case | Example |
+|------|---------|
+| no tolerance | `3 × $100 = $300` |
+| tolerance, some charged | `(3 − 1 tolerated) × $100 = $200` |
+| tolerance covers all | `3 confirmed, 5 tolerated = $0` |
+| cap hit (suffix) | `3 × $100 = $300, capped at $250` |
+
+Amounts are written as `$9,700` for whole dollars and as `$99.99` otherwise.
 
 ## Endpoints and JSON shapes
 
@@ -233,28 +309,42 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
 
   "inspection": {
     "findings": [
-      { "item": "Component #017", "issue": "Bent flange", "confidence": 0.94, "confirmed": true, "needsReview": false },
-      { "item": "Component #063", "issue": "Possible discoloration", "confidence": 0.52, "confirmed": false, "needsReview": true }
+      {
+        "id": "fnd_01", "unitRef": "Component #017", "defectType": "bend", "confidence": 0.94,
+        "evidenceIds": ["ev_05"], "description": "Bent flange", "presentInDispatch": false,
+        "reviewOverride": null, "reviewedBy": null, "reviewedAt": null
+      }
     ]
   },
 
   "adjustment": {
     "id": "adj_01",
-    "rule": "creditPerConfirmedDefect",
+    "computedAt": "2026-10-15T16:32:00Z",
     "confirmedDefects": 3,
-    "creditPerDefect": 100,
-    "amount": 300,
+    "credit": 300,
     "settlementAmount": 9700,
+    "appliedRule": {
+      "credit": "3 × $100 = $300",
+      "settlement": "$10,000 − $300 = $9,700"
+    },
+    "counted": [
+      { "findingId": "fnd_01", "unitRef": "Component #017", "reason": "meets_threshold", "detail": "94% confidence, at or above 85%" },
+      { "findingId": "fnd_02", "unitRef": "Component #042", "reason": "meets_threshold", "detail": "91% confidence, at or above 85%" },
+      { "findingId": "fnd_03", "unitRef": "Component #078", "reason": "meets_threshold", "detail": "88% confidence, at or above 85%" }
+    ],
+    "excluded": [],
+    "needsReview": [
+      { "findingId": "fnd_04", "unitRef": "Component #063", "reason": "below_confidence", "detail": "52% confidence is below the 85% threshold" }
+    ],
     "amountIfReviewedConfirmed": 400,
     "assumptions": [
-      "Only findings at ≥ 85% confidence count as confirmed",
-      "Dispatch photos show all 100 components intact",
-      "Credit rule taken unchanged from the signed agreement"
+      "Only findings at ≥ 85% confidence count as confirmed, unless a Reviewer decides",
+      "Covered defect types: bend, crack, deep_scratch, discoloration",
+      "Defects already visible in dispatch photos are excluded",
+      "No defect tolerance: every confirmed defective unit is credited",
+      "Credit rule taken unchanged from the signed agreement: $100 per defective unit, capped at $10,000"
     ],
-    "uncertainty": [
-      "1 item (#063) needs human review, excluded from total",
-      "If confirmed, adjustment would rise to $400"
-    ]
+    "status": "needs_review"
   },
 
   "actions": { "canAccept": true, "canDispute": true, "canResolve": false },
@@ -273,6 +363,11 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
 }
 ```
 
+`adjustment` is the engine's `Adjustment` output (see Settlement engine), plus the stored
+record's `id` and `computedAt`. `credit` replaces the old `amount`. `appliedRule`,
+`counted`, `excluded`, `needsReview` and `status` replace the old `rule`, `creditPerDefect`
+and `uncertainty`. The frontend builds its Uncertainty list from `needsReview` and
+`amountIfReviewedConfirmed`.
 `actions.canResolve` is true only for a Reviewer on a `Disputed` shipment.
 `evidence[].kind` is `"dispatch" | "receipt"`; the UI's "Dispatch photos" / "Receipt photos"
 headings map to these. `actions` is computed for the caller's `X-Demo-Role` from the
