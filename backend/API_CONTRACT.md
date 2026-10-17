@@ -63,17 +63,38 @@ Allowed transitions (PRD §9), as implemented in `backend/app/workflow.py`:
 | `Agreed`     | `In Transit` | Supplier (dispatch evidence uploaded)    |
 | `In Transit` | `Inspection` | Buyer (receipt evidence uploaded)        |
 | `Inspection` | `Proposed`   | System (rules engine)                    |
-| `Proposed`   | `Accepted`   | Supplier                                 |
-| `Proposed`   | `Disputed`   | Supplier, reason required                |
-| `Disputed`   | `Resolved`   | Reviewer only                            |
+| `Proposed`   | `Accepted`   | Buyer and Supplier: both must accept     |
+| `Proposed`   | `Disputed`   | Buyer or Supplier, reason required       |
+| `Disputed`   | `Resolved`   | Reviewer only, once `needsReview` is empty |
 
 `Accepted` and `Resolved` are terminal. Any other transition is rejected with `409`. A
 role outside the "Who may trigger" column gets `403`. For example, Buyer or Supplier
 resolving a dispute gets `403`, because neither party may resolve its own dispute. There is
 no `Disputed → Proposed` path: a disputed proposal cannot be revised and re-proposed, and
 the only way out of `Disputed` is a Reviewer moving it to `Resolved`.
-The frontend's Supplier-only Accept/Dispute buttons and its "reason required" check match
-this table, but the backend enforces both.
+
+A role that may make a move, but on a shipment that isn't ready for it, gets `409`:
+
+- **Acceptance needs both parties.** Each party accepts separately. The adjustment records
+  `buyerAcceptedAt` and `supplierAcceptedAt`, and the status stays `Proposed` until both
+  are set. The second acceptance moves it to `Accepted`. Accepting twice is a no-op that
+  keeps the first timestamp.
+- **A party that has accepted can no longer dispute.** The other party still can, until it
+  accepts too.
+- **Resolution is the engine's output, not a typed-in number.** While `Disputed`, the
+  Reviewer sets `reviewOverride` (`"confirmed"` or `"rejected"`) on findings. Resolving
+  recomputes the adjustment from the reviewed findings, and is refused while the recomputed
+  `needsReview` is non-empty. The resolved `credit` and `settlementAmount` are that
+  recomputed adjustment's. For PS-1042, confirming `fnd_04` (#063) gives `4 × $100 = $400`
+  and `$10,000 − $400 = $9,600`; rejecting it keeps `$300` / `$9,700`. The Reviewer may also
+  confirm or reject findings outside `needsReview`; the engine counts them the same way.
+
+`backend/app/workflow.py` (`accept`, `transition`) and `backend/app/resolution.py`
+(`review_finding`, `resolve`) implement these rules.
+
+The frontend's Supplier-only Accept/Dispute buttons no longer match this table. They should
+follow `actions.canAccept` / `actions.canDispute`, which the backend computes for both
+parties. The backend enforces every rule above regardless.
 
 ## Hard-coded values in `shipments.$id.tsx` that must come from the API
 
@@ -98,8 +119,8 @@ this table, but the backend enforces both.
 | 108 | "Verified" check | always shown | `evidence[].verified` (from the last verify run; `null` = never checked) |
 | 145 | Assumptions list | 3 strings | `adjustment.assumptions` |
 | 147 | Uncertainty list | 2 strings, `#063` hard-coded | Built from `adjustment.needsReview` and `adjustment.amountIfReviewedConfirmed` |
-| 152 | decision shown when `Accepted`/`Disputed` | status check | `status`, plus `actions` (below) |
-| 157 | `role === "Supplier"` to show buttons | client role check | `actions.canAccept`, `actions.canDispute` |
+| 152 | decision shown when `Accepted`/`Disputed` | status check | `status`, plus `actions` and `adjustment.buyerAcceptedAt` / `supplierAcceptedAt` (below) |
+| 157 | `role === "Supplier"` to show buttons | client role check | `actions.canAccept`, `actions.canDispute`, shown to Buyer and Supplier alike |
 | 52 | event `at: "Just now"` | literal | server timestamp |
 | 52 | event `actor: role ?? "User"` | client value | server, from the authenticated role |
 | 52 | event `hash: hashOf(text)` | client hash | server SHA-256 (see Hashing) |
@@ -344,10 +365,12 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
       "No defect tolerance: every confirmed defective unit is credited",
       "Credit rule taken unchanged from the signed agreement: $100 per defective unit, capped at $10,000"
     ],
-    "status": "needs_review"
+    "status": "needs_review",
+    "buyerAcceptedAt": null,
+    "supplierAcceptedAt": null
   },
 
-  "actions": { "canAccept": true, "canDispute": true, "canResolve": false },
+  "actions": { "canAccept": true, "canDispute": true, "canReview": false, "canResolve": false },
 
   "events": [
     {
@@ -368,10 +391,24 @@ record's `id` and `computedAt`. `credit` replaces the old `amount`. `appliedRule
 `counted`, `excluded`, `needsReview` and `status` replace the old `rule`, `creditPerDefect`
 and `uncertainty`. The frontend builds its Uncertainty list from `needsReview` and
 `amountIfReviewedConfirmed`.
-`actions.canResolve` is true only for a Reviewer on a `Disputed` shipment.
+`buyerAcceptedAt` and `supplierAcceptedAt` are the per-party acceptance of this adjustment
+(ISO 8601, or `null` until that party accepts). The UI shows each party's state from them,
+e.g. "Buyer accepted · waiting for Supplier".
+
+`actions` is computed for the caller's `X-Demo-Role`:
+
+| Field | True when |
+|-------|-----------|
+| `canAccept` | Caller is Buyer or Supplier, status is `Proposed`, and the caller hasn't accepted yet |
+| `canDispute` | Same as `canAccept`. Accepting gives up the right to dispute |
+| `canReview` | Caller is Reviewer and status is `Disputed` (may set `reviewOverride` on findings) |
+| `canResolve` | `canReview`, and the recomputed `adjustment.needsReview` is empty |
+
+So on the seeded PS-1042 (`Proposed`, nobody accepted yet), Buyer and Supplier both see
+`canAccept: true, canDispute: true`. After the Buyer accepts, the Buyer sees both `false`
+while the Supplier still sees both `true`.
 `evidence[].kind` is `"dispatch" | "receipt"`; the UI's "Dispatch photos" / "Receipt photos"
-headings map to these. `actions` is computed for the caller's `X-Demo-Role` from the
-transition table. `events[].txHash` is set only when the event was anchored on-chain.
+headings map to these. `events[].txHash` is set only when the event was anchored on-chain.
 `id`, `prevHash` and `txHash` are additions to `AuditEvent`; the existing four fields are
 unchanged.
 
@@ -425,5 +462,5 @@ FastAPI's default shape, `{ "detail": "<message>" }`:
 | 400 | Missing or invalid `X-Demo-Role`; dispute submitted without a reason |
 | 403 | Role not allowed to perform this transition |
 | 404 | Unknown shipment id |
-| 409 | Transition not allowed from the current status |
+| 409 | Transition not allowed from the current status; or allowed but its guard isn't met (other party hasn't accepted, caller already accepted and tries to dispute, `needsReview` not empty on resolve, findings reviewed outside `Disputed`) |
 | 422 | Request body validation failure (Pydantic) |
