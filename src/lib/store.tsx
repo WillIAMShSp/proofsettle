@@ -29,7 +29,7 @@ const seed: Shipment[] = [
       ["Oct 15, 16:22", "Buyer", "Receipt photos uploaded (4)"],
       ["Oct 15, 16:31", "AI", "Inspection complete: 3 defects flagged"],
       ["Oct 15, 16:32", "System", "Adjustment proposed from agreement rule: $300"],
-    ].map(([at, actor, text]) => ({ at, actor, text, hash: h(text) })),
+    ].map(([at, actor, text]: string[]) => ({ at, actor, text, hash: h(text) })),
   },
   { id: "PS-1038", title: "40 hydraulic valves", buyer: "Northgate Assembly Ltd", supplier: "Kestrel Fluid Systems", amount: 6400, status: "In Transit", events: [] },
   { id: "PS-1031", title: "250 steel brackets", buyer: "Northgate Assembly Ltd", supplier: "Ferro Precision Works", amount: 3750, status: "Resolved", events: [] },
