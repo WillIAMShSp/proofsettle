@@ -8,3 +8,5 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Database access is scoped by organization: users see shipments where their org is buyer or supplier; reviewers see all. Role and organization on a profile are assigned server-side only, never by the user. Why: prevents users from granting themselves access.
