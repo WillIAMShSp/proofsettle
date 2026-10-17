@@ -128,9 +128,11 @@ Insufficient or ambiguous evidence is flagged for human review.
 
 Step 5: Approve or Dispute
 
-The supplier reviews the case and accepts or disputes the proposed adjustment.
+The buyer and the supplier each review the case and accept or dispute the proposed adjustment.
 
-An accepted proposal produces a final decision record. A disputed proposal remains open for review.
+The proposal is accepted only once both parties have accepted it, which produces a final decision record. Either party may dispute it instead, giving a reason.
+
+A disputed proposal goes to a Reviewer, who is neither the buyer nor the supplier. The Reviewer confirms or rejects individual findings, and the rules engine recomputes the adjustment from the reviewed findings. The case is resolved with that recomputed amount; the Reviewer never enters an amount.
 
 6\. Functional Requirements
 
@@ -262,9 +264,13 @@ Flag ambiguous evidence.
 
 Dispute Management
 
-Allow suppliers to accept or dispute proposals.
+Allow both buyer and supplier to accept or dispute proposals.
+
+Accept a proposal only when both parties have accepted it.
 
 Record the reason for a dispute.
+
+Allow a Reviewer to resolve a dispute by confirming or rejecting findings, with the settlement engine recomputing the final adjustment.
 
 Track the case status.
 
@@ -350,9 +356,9 @@ Structured outputs for downstream processing.
 
 Blockchain
 
-Solidity smart contract.
+Solana program written with Anchor (branch feat/solana-blockchain).
 
-Local EVM chain or testnet.
+Local Solana validator or devnet.
 
 Responsibilities:
 
@@ -374,7 +380,7 @@ Full documents and images remain off-chain. Their cryptographic hashes and neces
 
 Blockchain is included only to provide a shared way to verify that important records have not silently changed.
 
-The smart contract should support:
+The Solana program should support:
 
 Registering an agreement hash.
 
@@ -386,6 +392,8 @@ Restricting state transitions to authorized participants.
 
 Emitting events for verification.
 
+Each shipment is stored in a program-derived account (PDA) seeded by the shipment's UUID, and each evidence hash in its own account. Hashes are stored as raw 32-byte SHA-256 digests and amounts as integer cents. Instructions are signed by the buyer, the supplier, or the backend acting as the program's authority.
+
 Proposed Workflow States
 
 Draft → Agreed → In Transit → Inspection → Proposed → Accepted
@@ -394,7 +402,7 @@ If a proposal is challenged:
 
 Proposed → Disputed → Resolved
 
-For the hackathon, the team will use a local blockchain or testnet and simulated funds.
+For the hackathon, the team will use a local Solana validator or devnet and simulated funds.
 
 A hash proves that the submitted bytes match the recorded digest. It does not prove when a photograph was taken, whether the scene is authentic, or who caused the damage.
 
@@ -440,6 +448,8 @@ id, shipment\_id, event\_type, payload\_hash, tx\_hash
 
 
 
+In Supabase Postgres, these tables live in their own proofsettle schema. The public schema holds Lovable-generated tables with the same names and a different shape, which the backend never reads or writes. Local development and tests use SQLite.
+
 Production implementations should add strict authorization, secure file access, validated schemas, and immutable event-handling practices.
 
 11\. API Specification
@@ -450,47 +460,17 @@ Endpoint
 
 Purpose
 
-POST
+GET
+
+/health
+
+Check API and database status
+
+GET
 
 /shipments
 
-Create shipment
-
-POST
-
-/shipments/{id}/agreement
-
-Create agreement
-
-POST
-
-/shipments/{id}/agreement/approve
-
-Approve terms
-
-POST
-
-/shipments/{id}/evidence
-
-Upload evidence
-
-POST
-
-/shipments/{id}/inspect
-
-Analyze submitted images
-
-POST
-
-/shipments/{id}/adjustment
-
-Calculate proposed adjustment
-
-POST
-
-/adjustments/{id}/decision
-
-Accept or dispute proposal
+List shipments
 
 GET
 
@@ -502,15 +482,77 @@ GET
 
 /shipments/{id}/audit
 
-Retrieve audit events
+Retrieve audit events with hash-chain check
+
+GET
+
+/evidence/{id}/file
+
+Download an evidence file
 
 POST
 
-/audit/{id}/verify
+/shipments
 
-Verify evidence and event hashes
+Create shipment with agreement terms (buyer)
+
+POST
+
+/shipments/{id}/agreement/approve
+
+Approve terms (buyer or supplier)
+
+POST
+
+/shipments/{id}/evidence
+
+Upload dispatch (supplier) or receipt (buyer) photos
+
+POST
+
+/shipments/{id}/inspect
+
+Analyze receipt photos and propose adjustment
+
+POST
+
+/shipments/{id}/accept
+
+Accept proposal (buyer or supplier)
+
+POST
+
+/shipments/{id}/dispute
+
+Dispute proposal with a reason (buyer or supplier)
+
+POST
+
+/findings/{id}/review
+
+Confirm or reject a finding (Reviewer)
+
+POST
+
+/shipments/{id}/resolve
+
+Resolve dispute with the recomputed adjustment (Reviewer)
+
+POST
+
+/shipments/{id}/audit/verify
+
+Verify agreement, evidence and event hashes
+
+POST
+
+/dev/reset
+
+Reload the demo data (dev mode only)
 
 
+
+Request and response shapes are specified in backend/API\_CONTRACT.md.
 
 The backend must validate the caller's organization and role before allowing approvals or decisions. It must calculate adjustments from stored agreement terms and validated findings rather than trusting amounts submitted by the frontend.
 
@@ -602,7 +644,7 @@ Demonstrate how the rules engine calculates a proposed $300 credit.
 
 2:15–3:00 — Verify the Decision
 
-Switch to the supplier's view, demonstrate acceptance or dispute, and show the audit trail and evidence-hash verification.
+Switch between the buyer's and supplier's views, demonstrate acceptance by both parties or a dispute resolved by a Reviewer, and show the audit trail and evidence-hash verification.
 
 Required Demo Cases
 
@@ -612,17 +654,19 @@ Evidence meets the predefined criteria.
 
 The adjustment is calculated correctly.
 
-Both parties approve.
+Both parties accept.
 
 The case closes with an auditable record.
 
 Case B: Disputed Adjustment
 
-The supplier challenges the evidence or interpretation.
+The buyer or supplier challenges the evidence or interpretation.
 
-The system records the dispute.
+The system records the dispute and its reason.
 
-The case remains open for review.
+A Reviewer confirms or rejects the disputed findings.
+
+The rules engine recomputes the adjustment, and the case is resolved with an auditable record.
 
 This demonstrates that ProofSettle supports accountable decisions rather than automatically trusting AI outputs.
 
