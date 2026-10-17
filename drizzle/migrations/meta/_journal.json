@@ -1,5 +1,13 @@
 {
   "version": "7",
   "dialect": "postgresql",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792272002429,
+      "tag": "0000_proofsettle_schema",
+      "breakpoints": true
+    }
+  ]
 }
