@@ -108,7 +108,7 @@ def compute_adjustment(terms: AgreementTerms, findings: tuple[Finding, ...] | li
         settlement_amount=settlement,
         applied_rule=AppliedRule(
             credit=credit_rule,
-            settlement=f"{_usd(terms.invoice_amount)} − {_usd(credit)} = {_usd(settlement)}",
+            settlement=f"{usd(terms.invoice_amount)} − {usd(credit)} = {usd(settlement)}",
         ),
         counted=tuple(counted),
         excluded=tuple(excluded),
@@ -131,13 +131,13 @@ def _credit(terms: AgreementTerms, confirmed: int) -> tuple[Decimal, str]:
     raw = max(0, confirmed - tolerance) * per_unit
 
     if tolerance == 0:
-        text = f"{confirmed} × {_usd(per_unit)} = {_usd(raw)}"
+        text = f"{confirmed} × {usd(per_unit)} = {usd(raw)}"
     elif confirmed > tolerance:
-        text = f"({confirmed} − {tolerance} tolerated) × {_usd(per_unit)} = {_usd(raw)}"
+        text = f"({confirmed} − {tolerance} tolerated) × {usd(per_unit)} = {usd(raw)}"
     else:
-        text = f"{confirmed} confirmed, {tolerance} tolerated = {_usd(raw)}"
+        text = f"{confirmed} confirmed, {tolerance} tolerated = {usd(raw)}"
     if raw > cap:
-        text += f", capped at {_usd(cap)}"
+        text += f", capped at {usd(cap)}"
     return min(raw, cap), text
 
 
@@ -152,13 +152,13 @@ def _assumptions(terms: AgreementTerms) -> tuple[str, ...]:
         if tolerance
         else "No defect tolerance: every confirmed defective unit is credited",
         (
-            f"Credit rule taken unchanged from the signed agreement: {_usd(terms.compensation.amount_per_unit)} "
-            f"per defective unit, capped at {_usd(terms.compensation.max_credit)}"
+            f"Credit rule taken unchanged from the signed agreement: {usd(terms.compensation.amount_per_unit)} "
+            f"per defective unit, capped at {usd(terms.compensation.max_credit)}"
         ),
     )
 
 
-def _usd(amount: Decimal) -> str:
+def usd(amount: Decimal) -> str:
     # "$9,700" for whole dollars, "$99.99" otherwise.
     if amount == amount.to_integral_value():
         return f"${int(amount):,}"

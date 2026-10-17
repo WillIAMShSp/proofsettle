@@ -4,6 +4,22 @@ What the FastAPI backend must return so the existing frontend (`src/lib/store.ts
 `src/routes/dashboard.tsx`, `src/routes/shipments.$id.tsx`) can drop its mock data.
 Sections marked **Proposed** are not implemented yet and are open for review.
 
+## Storage
+
+FastAPI owns the schema (`backend/app/models.py`) and is the only writer of business state.
+Tables are created on startup. SQLite (`./proofsettle.db`) is the default for local dev and
+tests. For the demo, `PROOFSETTLE_DATABASE_URL` points at the Supabase Postgres database
+(`postgresql+psycopg://...`), where our tables live in their own **`proofsettle`** schema.
+Supabase's `public` schema has Lovable-generated tables with the same names (`shipments`,
+`agreements`, `evidence`, `adjustments`, `audit_events`, ...) and a different shape. The
+backend never reads or writes those.
+
+`uv run python -m app.seed_db` drops and recreates our tables, then loads `PS-1042`,
+`PS-1038` and `PS-1031`. Each one is replayed through the workflow, so the stored statuses
+follow the rules and every audit chain verifies. Evidence files are `src/assets/dispatch.jpg`
+and `receipt.jpg`, copied to `PROOFSETTLE_EVIDENCE_DIR` (default `./storage/evidence`) with
+their real SHA-256.
+
 ## Conventions
 
 - JSON keys are **camelCase** to match the TypeScript types (`disputeReason`, not
@@ -19,7 +35,9 @@ Sections marked **Proposed** are not implemented yet and are open for review.
 - Hashes are **lowercase hex SHA-256** (64 chars). The frontend's `hashOf` is a fake
   FNV-based function that also yields 64 hex chars, so `short()` keeps working unchanged.
 - Caller role, until real auth exists: header `X-Demo-Role: Buyer | Supplier | Reviewer`
-  (mirrors the fake login). The backend validates role on every write. `Reviewer` is a
+  (mirrors the fake login). Every `/shipments` route requires it (`400` if it's missing or
+  invalid), and the backend validates the role on every write. `GET /evidence/{id}/file` is
+  exempt, because an `<img src>` can't send headers. `Reviewer` is a
   neutral third party who resolves disputes. The frontend's `Role` type and login screen
   don't have it yet.
 
@@ -146,6 +164,20 @@ has been reviewed.
 Seed data from `store.tsx` to replicate: `PS-1042` (Proposed, 7 events), `PS-1038`
 (In Transit, 40 hydraulic valves, $6,400, Kestrel Fluid Systems), `PS-1031` (Resolved,
 250 steel brackets, $3,750). All buyers are Northgate Assembly Ltd.
+
+As seeded by `backend/app/seed_db.py`:
+
+- **`PS-1042`** has `store.tsx`'s 7 events, with the same texts and times (in 2026). One
+  change: "Shipment marked In Transit" has actor `Supplier`, not `System`, because only the
+  Supplier may make that move. Evidence is `ev_01`–`ev_04` (dispatch) and `ev_05`–`ev_08`
+  (receipt), and the adjustment is `adj_01`.
+- **`PS-1038`** has 4 events, through In Transit, and dispatch evidence `ev_09`–`ev_12`. It
+  has no findings or adjustment yet.
+- **`PS-1031`** has 11 events. It is $15 per bracket with 1 tolerated defect. The proposal
+  was `(3 − 1) × $15 = $30`. The Supplier disputed it ("Bracket #101 shows a weld seam, not
+  a crack"). The Reviewer rejected `fnd_07` (#101) and `fnd_08` (#187, needs review), and
+  the resolution was `(2 − 1) × $15 = $15` → `$3,735`. `fnd_09` is excluded as present at
+  dispatch.
 
 ## Agreement terms (rules DSL)
 
@@ -276,7 +308,7 @@ Amounts are written as `$9,700` for whole dollars and as `$99.99` otherwise.
 { "status": "ok", "db": "ok" }
 ```
 
-### `GET /shipments` — shipment list (**Proposed**)
+### `GET /shipments` — shipment list (implemented)
 
 Exactly the dashboard's fields. `events` is omitted from list items; the dashboard doesn't
 read it.
@@ -294,7 +326,7 @@ read it.
 ]
 ```
 
-### `GET /shipments/{id}` — shipment detail (**Proposed**)
+### `GET /shipments/{id}` — shipment detail (implemented)
 
 A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` before
 `Proposed`).
@@ -320,7 +352,7 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
     {
       "id": "ev_01",
       "kind": "dispatch",
-      "url": "/files/ev_01.jpg",
+      "url": "/evidence/ev_01/file",
       "sha256": "<sha256>",
       "uploadedBy": "Supplier",
       "at": "2026-10-11T08:05:00Z",
@@ -375,19 +407,25 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
   "events": [
     {
       "id": "evt_01",
+      "seq": 1,
       "at": "2026-10-09T10:12:00Z",
       "actor": "Buyer",
+      "type": "agreement.drafted",
       "text": "Agreement drafted: 100 components, $10,000",
       "hash": "<sha256>",
+      "payloadHash": "<sha256>",
       "prevHash": null,
-      "txHash": null
+      "txHash": null,
+      "chainStatus": "skipped"
     }
   ]
 }
 ```
 
-`adjustment` is the engine's `Adjustment` output (see Settlement engine), plus the stored
-record's `id` and `computedAt`. `credit` replaces the old `amount`. `appliedRule`,
+`adjustment` is the engine's `Adjustment` output (see Settlement engine), computed fresh
+from the stored terms and findings on every request, plus the stored record's `id` and
+`computedAt`. It is `null` before `Proposed`, and `inspection` is `null` before any findings
+exist. `credit` replaces the old `amount`. `appliedRule`,
 `counted`, `excluded`, `needsReview` and `status` replace the old `rule`, `creditPerDefect`
 and `uncertainty`. The frontend builds its Uncertainty list from `needsReview` and
 `amountIfReviewedConfirmed`.
@@ -408,9 +446,48 @@ So on the seeded PS-1042 (`Proposed`, nobody accepted yet), Buyer and Supplier b
 `canAccept: true, canDispute: true`. After the Buyer accepts, the Buyer sees both `false`
 while the Supplier still sees both `true`.
 `evidence[].kind` is `"dispatch" | "receipt"`; the UI's "Dispatch photos" / "Receipt photos"
-headings map to these. `events[].txHash` is set only when the event was anchored on-chain.
-`id`, `prevHash` and `txHash` are additions to `AuditEvent`; the existing four fields are
-unchanged.
+headings map to these. `events[].txHash` is the Solana transaction signature, set only once the event is anchored
+on-chain. `chainStatus` is `pending | confirmed | failed | skipped`, and is `skipped` for
+everything until chain anchoring exists. `hash` is the event's `eventHash` and `prevHash` is
+its `prevEventHash` (see Hashing). `id`, `seq`, `type`, `payloadHash`, `prevHash`, `txHash`
+and `chainStatus` are additions to `AuditEvent`; the existing four fields are unchanged.
+
+### `GET /shipments/{id}/audit` — audit trail with chain check (implemented)
+
+The shipment's events, as in the detail response, plus `verify_chain`'s per-event result.
+Only stored hashes are checked here; evidence files aren't re-hashed (that is
+`POST .../audit/verify`).
+
+```json
+{
+  "shipmentId": "PS-1042",
+  "verified": true,
+  "checked": 7,
+  "events": [ { "id": "evt_01", "...": "same shape as detail events" } ],
+  "checks": [
+    {
+      "id": "evt_01", "seq": 1,
+      "storedHash": "<sha256>", "recomputedHash": "<sha256>",
+      "payloadOk": true, "linkOk": true, "ok": true
+    }
+  ]
+}
+```
+
+- `payloadOk` means `payloadHash` matches the stored payload.
+- `linkOk` means `seq` follows on from the previous event, and `prevEventHash` is the
+  previous event's stored `eventHash`.
+- `ok` means both of those, and the recomputed event hash equals the stored one.
+
+Editing an event's text, actor, time or payload fails that event. Deleting an event fails
+the one after it. Rewriting an event together with its own hash still fails the next
+event's link.
+
+### `GET /evidence/{id}/file` — evidence file (implemented)
+
+The raw stored bytes, with the uploaded content type (`image/jpeg` for the seed).
+`sha256(body)` equals `evidence[].sha256`. No `X-Demo-Role` is needed. Unknown id or
+missing file → `404`.
 
 ### `POST /shipments/{id}/audit/verify` — verify hashes (**Proposed**)
 
@@ -440,16 +517,36 @@ the UI verifies a whole shipment at once.
 - `chain.available: false` means the chain was unreachable. Verification still succeeds on
   local hashes alone (PRD §9: the app must work without the blockchain).
 
-## Hashing (**Proposed**)
+## Hashing (implemented: `backend/app/hashing.py`, `backend/app/audit.py`)
 
 ```
-event.hash = sha256(canonical_json({
-  "shipmentId", "seq", "at", "actor", "type", "text", "prevHash"
+canonical_json(x) = json.dumps(x, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=False, allow_nan=False).encode("utf-8")
+```
+
+`x` is a model's `model_dump(mode="json", by_alias=True)`: camelCase keys, and money as JSON
+numbers via `Money` (`10000`, `33.33`). A raw `Decimal`, `NaN` or `datetime` raises an error
+rather than being hashed. This is the definition in `backend/CHAIN_ALIGNMENT.md` §4, so a
+hash's 32 raw bytes are what the Solana program takes as `[u8; 32]`. In JSON and in the
+database a hash is 64 lowercase hex characters.
+
+```
+termsHash     = sha256(canonical_json(terms))
+payloadHash   = sha256(canonical_json(event.payload))
+eventHash     = sha256(canonical_json({
+  "shipmentId", "seq", "at", "actor", "type", "text", "payloadHash", "prevEventHash"
 }))
 ```
 
-`canonical_json` means sorted keys, no whitespace, UTF-8. `prevHash` links each event to the
-one before it, so deleting or reordering events is detectable as well as editing them.
+`at` is ISO 8601 UTC with a `Z` suffix. `prevEventHash` is the previous event's `eventHash`,
+or `null` for `seq` 1. It links each event to the one before it, so deleting or reordering
+events is detectable as well as editing them. Payloads carry the hashes of what the event
+is about, e.g. `termsHash`, each evidence file's `sha256`, `findingsHash` (of the findings
+list) and `adjustmentHash` (of the engine's `Adjustment`).
+
+For the chain, each shipment also has a stable `chainUuid = uuid5(namespace, id)`, e.g.
+`PS-1042` → `867aec08-fe1b-5d73-8f38-b2fb1e862ae8`. Its 16 bytes are the program's shipment
+PDA seed. It is not exposed in the API yet.
 `evidence.sha256` is the SHA-256 of the raw uploaded bytes. As the PRD says, a matching
 hash shows the bytes are unchanged. It does not prove when or where a photo was taken.
 

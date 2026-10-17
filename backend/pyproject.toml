@@ -5,6 +5,7 @@ description = "ProofSettle API: agreements, evidence, settlement and audit"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.143.3",
+    "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.0",
     "sqlalchemy>=2",
     "uvicorn[standard]>=0.54.0",
