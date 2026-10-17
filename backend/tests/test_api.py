@@ -278,3 +278,33 @@ def test_cors_allows_the_frontend_dev_server(client):
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("path", "headers", "code"),
+    [
+        ("/health", {}, 200),
+        ("/shipments", BUYER, 200),
+        ("/shipments/PS-1042", BUYER, 200),
+        ("/shipments/PS-1042/audit", BUYER, 200),
+        ("/shipments", {}, 400),  # HTTPException
+        ("/shipments/PS-0000", BUYER, 404),
+        ("/no-such-route", {}, 404),  # FastAPI's own not-found
+        ("/evidence/ev_99/file", {}, 404),
+    ],
+)
+def test_json_responses_declare_utf8(client, path, headers, code):
+    # Windows PowerShell 5.1 decodes a bare application/json as Latin-1 and garbles ×, −, ≥.
+    res = client.get(path, headers=headers)
+    assert res.status_code == code
+    assert res.headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_utf8_json_body_round_trips(client):
+    res = client.get("/shipments/PS-1042", headers=BUYER)
+    assert "3 × $100 = $300" in res.content.decode("utf-8")
+    assert res.json()["adjustment"]["assumptions"][0].startswith("Only findings at ≥ 85%")
+
+
+def test_non_json_responses_keep_their_content_type(client):
+    assert client.get("/evidence/ev_01/file").headers["content-type"] == "image/jpeg"

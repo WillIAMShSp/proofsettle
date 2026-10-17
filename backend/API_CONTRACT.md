@@ -22,6 +22,9 @@ their real SHA-256.
 
 ## Conventions
 
+- Every JSON response, errors included, has `Content-Type: application/json; charset=utf-8`.
+  Bodies contain literal `×`, `−` and `≥`, and Windows PowerShell 5.1 garbles them without the
+  charset.
 - JSON keys are **camelCase** to match the TypeScript types (`disputeReason`, not
   `dispute_reason`). Python code stays snake_case; Pydantic aliases do the mapping.
 - Money is a JSON **number in dollars (USD)**, matching `amount: 10000` in the frontend,
