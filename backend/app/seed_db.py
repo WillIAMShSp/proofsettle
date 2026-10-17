@@ -20,6 +20,7 @@ from app.db import create_tables, drop_tables, engine
 from app.findings import Finding
 from app.hashing import hash_json, sha256_hex, shipment_uuid
 from app.models import AdjustmentRow, Agreement, Evidence, EvidenceKind, FindingRow, Shipment
+from app.operations import adjustment_payload
 from app.resolution import resolve, review_finding
 from app.seed import PS_1031_FINDINGS, PS_1031_TERMS, PS_1038_TERMS, PS_1042_FINDINGS, PS_1042_TERMS
 from app.settlement import Adjustment, compute_adjustment, usd
@@ -143,7 +144,7 @@ class _Builder:
             settlement_amount=adj.settlement_amount,
         )
         self.db.add(self.adjustment)
-        payload = _adjustment_payload(adjustment_id, adj) | {"status": self.move(Status.PROPOSED, Actor.SYSTEM)}
+        payload = adjustment_payload(adjustment_id, adj) | {"status": self.move(Status.PROPOSED, Actor.SYSTEM)}
         append_event(
             self.s,
             EventType.ADJUSTMENT_PROPOSED,
@@ -184,7 +185,7 @@ class _Builder:
         self.adjustment.confirmed_defects = adj.confirmed_defects
         self.adjustment.credit = adj.credit
         self.adjustment.settlement_amount = adj.settlement_amount
-        payload = _adjustment_payload(self.adjustment.id, adj) | {
+        payload = adjustment_payload(self.adjustment.id, adj) | {
             "status": {"from": before.value, "to": self.s.status.value}
         }
         append_event(
@@ -196,17 +197,6 @@ class _Builder:
             at=when,
         )
         return adj
-
-
-def _adjustment_payload(adjustment_id: str, adj: Adjustment) -> dict[str, object]:
-    dumped = adj.model_dump(mode="json", by_alias=True)
-    return {
-        "adjustmentId": adjustment_id,
-        "adjustmentHash": hash_json(adj),
-        "confirmedDefects": adj.confirmed_defects,
-        "credit": dumped["credit"],
-        "settlementAmount": dumped["settlementAmount"],
-    }
 
 
 def _new(db: Session, evidence_dir: Path, id: str, title: str, supplier: str, created: datetime) -> _Builder:

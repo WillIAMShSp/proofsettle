@@ -11,7 +11,19 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, Integer, String, Text, TypeDecorator, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    TypeDecorator,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -81,8 +93,13 @@ class Shipment(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
     agreement: Mapped["Agreement | None"] = relationship(back_populates="shipment", uselist=False)
-    evidence: Mapped[list["Evidence"]] = relationship(back_populates="shipment", order_by="Evidence.id")
-    findings: Mapped[list["FindingRow"]] = relationship(back_populates="shipment", order_by="FindingRow.id")
+    # Ids are sequential ("ev_09", "ev_10", ..., "ev_100"): shorter first, then by text.
+    evidence: Mapped[list["Evidence"]] = relationship(
+        back_populates="shipment", order_by=lambda: (func.length(Evidence.id), Evidence.id)
+    )
+    findings: Mapped[list["FindingRow"]] = relationship(
+        back_populates="shipment", order_by=lambda: (func.length(FindingRow.id), FindingRow.id)
+    )
     adjustment: Mapped["AdjustmentRow | None"] = relationship(back_populates="shipment", uselist=False)
     events: Mapped[list["AuditEvent"]] = relationship(back_populates="shipment", order_by="AuditEvent.seq")
 

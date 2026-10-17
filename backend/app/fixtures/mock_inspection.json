@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "unitRef": "Component #017",
+      "defectType": "bend",
+      "confidence": 0.94,
+      "receiptPhoto": 0,
+      "description": "Bent flange",
+      "presentInDispatch": false
+    },
+    {
+      "unitRef": "Component #042",
+      "defectType": "crack",
+      "confidence": 0.91,
+      "receiptPhoto": 1,
+      "description": "Surface crack near bore",
+      "presentInDispatch": false
+    },
+    {
+      "unitRef": "Component #078",
+      "defectType": "deep_scratch",
+      "confidence": 0.88,
+      "receiptPhoto": 2,
+      "description": "Deep scratch on mating face",
+      "presentInDispatch": false
+    },
+    {
+      "unitRef": "Component #063",
+      "defectType": "discoloration",
+      "confidence": 0.52,
+      "receiptPhoto": 3,
+      "description": "Possible discoloration",
+      "presentInDispatch": false
+    }
+  ]
+}

@@ -2,8 +2,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -11,7 +12,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import settings
 from app.db import create_tables, engine, get_db
+from app.inspection import InspectionFailed
 from app.routes import router
+from app.workflow import TransitionError
 
 JSON_UTF8 = b"application/json; charset=utf-8"
 
@@ -58,6 +61,17 @@ app.add_middleware(
 )
 app.add_middleware(JSONCharsetMiddleware)
 app.include_router(router)
+
+
+@app.exception_handler(TransitionError)
+def transition_error(_: Request, exc: TransitionError) -> JSONResponse:
+    # 400 / 403 / 409 as API_CONTRACT.md's Errors table says; nothing was committed.
+    return JSONResponse({"detail": str(exc)}, status_code=exc.status_code)
+
+
+@app.exception_handler(InspectionFailed)
+def inspection_failed(_: Request, exc: InspectionFailed) -> JSONResponse:
+    return JSONResponse({"detail": str(exc)}, status_code=502)
 
 
 @app.get("/health")

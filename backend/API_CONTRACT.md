@@ -2,7 +2,7 @@
 
 What the FastAPI backend must return so the existing frontend (`src/lib/store.tsx`,
 `src/routes/dashboard.tsx`, `src/routes/shipments.$id.tsx`) can drop its mock data.
-Sections marked **Proposed** are not implemented yet and are open for review.
+Every endpoint below is implemented; the contract is still open for review.
 
 ## Storage
 
@@ -492,19 +492,68 @@ The raw stored bytes, with the uploaded content type (`image/jpeg` for the seed)
 `sha256(body)` equals `evidence[].sha256`. No `X-Demo-Role` is needed. Unknown id or
 missing file → `404`.
 
-### `POST /shipments/{id}/audit/verify` — verify hashes (**Proposed**)
+### Writes (implemented: `backend/app/operations.py`)
 
-Recomputes every event hash and its chain link, and re-hashes every evidence file from
-storage. Path is nested under the shipment rather than the PRD's `/audit/{id}/verify`, since
-the UI verifies a whole shipment at once.
+Every write needs `X-Demo-Role`, goes through `workflow.py` / `resolution.py`, appends one
+audit event (two for inspect), and returns the updated **shipment detail** (same shape as
+`GET /shipments/{id}`, with `actions` for the caller). A refused write stores nothing.
+
+**No request carries an amount or a status.** Statuses come from the workflow and amounts
+from the engine over the stored terms and findings. Routes without a body ignore any body
+sent, so `{"amount": 1, "status": "Accepted"}` on `/accept` or `/resolve` changes nothing.
+Routes with a body reject unknown fields with `422`.
+
+| Endpoint | Role | Body | Effect |
+|----------|------|------|--------|
+| `POST /shipments` | Buyer | `{ title, supplier, terms }` (`terms` is `AgreementTerms`) | New `Draft` shipment, next free id (`PS-1043`, ...). `buyer` is the demo buyer, Northgate Assembly Ltd. Returns `201`. |
+| `POST /shipments/{id}/agreement/approve` | Buyer, Supplier | none | Records that party's approval. The second one moves `Draft → Agreed` (actor System). Approving twice is a no-op. |
+| `POST /shipments/{id}/evidence` | Supplier in `Agreed` (dispatch), Buyer in `In Transit` (receipt) | `multipart/form-data`, one or more `files` | Stores JPEG/PNG photos. The kind follows from the status. Reaching `minDispatchPhotos` / `minReceiptPhotos` moves `Agreed → In Transit` / `In Transit → Inspection`. |
+| `POST /shipments/{id}/inspect` | Buyer, Supplier | none | Runs the inspection provider in `Inspection`, stores its findings, then System moves `Inspection → Proposed` with the engine's adjustment. |
+| `POST /shipments/{id}/accept` | Buyer, Supplier | none | Per-party acceptance. The second moves `Proposed → Accepted`. Accepting twice is a no-op. |
+| `POST /shipments/{id}/dispute` | Buyer, Supplier | `{ "reason": "..." }` (≤ 400 chars) | `Proposed → Disputed`. A missing or blank reason → `400`. Refused (`409`) once the caller has accepted. |
+| `POST /findings/{id}/review` | Reviewer | `{ "decision": "confirmed" \| "rejected" }` | Sets `reviewOverride` while `Disputed`. Deciding again replaces the decision. |
+| `POST /shipments/{id}/resolve` | Reviewer | none | `Disputed → Resolved` with the engine's recomputed adjustment. `409` while `needsReview` is non-empty. |
+| `POST /dev/reset` | none | none | Only when `PROOFSETTLE_DEV_MODE=true` (otherwise `404`): drops every table, reloads the seed and deletes uploaded files. Returns `{ "shipments": ["PS-1042", "PS-1038", "PS-1031"] }`. |
+
+Evidence uploads:
+
+- The type is detected from the file's magic bytes. The client's declared content type and
+  file name are ignored. Anything other than JPEG or PNG → `415`.
+- Limits: `PROOFSETTLE_MAX_EVIDENCE_BYTES` per file (default 10 MiB) and
+  `PROOFSETTLE_MAX_EVIDENCE_FILES` per request (default 20). Over either → `413`.
+- `sha256` is taken from the exact uploaded bytes before they are written. Files are stored
+  as `{evidenceId}.jpg|png`, and ids continue the seed's sequence (`ev_21`, ...).
+
+Inspection (`backend/app/inspection.py`):
+
+- An `InspectionProvider` receives the terms and every photo's bytes, and returns its report
+  as **JSON text**, as a vision model would. `MockProvider` is the only one for now. It
+  reads `app/fixtures/mock_inspection.json`, which holds PS-1042's four findings, and pins
+  them to the shipment's receipt photos by position.
+- Before the provider runs, every photo is re-hashed. If one is missing or changed → `409`.
+- The output is validated against `InspectionReport`: `unitRef`, `defectType`,
+  `confidence`, `evidenceIds`, `description` and `presentInDispatch` per finding. Unknown
+  keys are rejected, so a provider cannot send an amount, an id or a review. Every
+  `evidenceId` must be one of this shipment's photos. If validation fails, or the provider
+  errors → `502` and nothing is stored.
+- The `inspection.completed` event (actor AI) records the provider, `requestedBy`,
+  `findingIds` and `findingsHash`. It is followed by `adjustment.proposed` (actor System).
+
+### `POST /shipments/{id}/audit/verify` — verify hashes (implemented)
+
+Re-hashes the agreement terms and every evidence file from storage, and walks the event
+chain as `GET .../audit` does. Each evidence item's `verified` is set to its result, and the
+detail's `evidence[].verified` shows it from then on. Any role.
 
 ```json
 {
   "shipmentId": "PS-1042",
   "verified": true,
-  "checked": 15,
+  "checked": 16,
+  "agreement": { "id": "agr_01", "storedHash": "<sha256>", "recomputedHash": "<sha256>", "ok": true },
   "events": [
-    { "id": "evt_01", "storedHash": "<sha256>", "recomputedHash": "<sha256>", "ok": true }
+    { "id": "evt_01", "seq": 1, "storedHash": "<sha256>", "recomputedHash": "<sha256>",
+      "payloadOk": true, "linkOk": true, "ok": true }
   ],
   "evidence": [
     { "id": "ev_01", "storedHash": "<sha256>", "recomputedHash": "<sha256>", "ok": true }
@@ -514,11 +563,15 @@ the UI verifies a whole shipment at once.
 }
 ```
 
-- `verified` is `true` only if every event and evidence item has `ok: true`.
-- `checked` = `events.length + evidence.length`. The button label becomes
-  `"${checked} hashes verified"`, or a failure state when `verified` is `false`.
-- `chain.available: false` means the chain was unreachable. Verification still succeeds on
-  local hashes alone (PRD §9: the app must work without the blockchain).
+- `verified` is `true` only if the agreement, every event and every evidence item are `ok`.
+  A changed file fails that item only.
+- `checked` = `events.length + evidence.length + 1` (the agreement). The button label
+  becomes `"${checked} hashes verified"`, or a failure state when `verified` is `false`.
+- A missing evidence file has `recomputedHash: null` and `ok: false`.
+- `agreement.recomputedHash` is `sha256(canonical_json(stored terms))`.
+- `chain.available: false` means the chain was unreachable. Anchoring doesn't exist yet, so
+  it is always `false` for now. Verification still succeeds on local hashes alone (PRD §9:
+  the app must work without the blockchain).
 
 ## Hashing (implemented: `backend/app/hashing.py`, `backend/app/audit.py`)
 
@@ -559,8 +612,11 @@ FastAPI's default shape, `{ "detail": "<message>" }`:
 
 | Code | When |
 |------|------|
-| 400 | Missing or invalid `X-Demo-Role`; dispute submitted without a reason |
-| 403 | Role not allowed to perform this transition |
-| 404 | Unknown shipment id |
-| 409 | Transition not allowed from the current status; or allowed but its guard isn't met (other party hasn't accepted, caller already accepted and tries to dispute, `needsReview` not empty on resolve, findings reviewed outside `Disputed`) |
+| 400 | Missing or invalid `X-Demo-Role`; dispute submitted without a reason (or a blank one) |
+| 403 | Role not allowed to perform this transition or write |
+| 404 | Unknown shipment, finding or evidence id; `/dev/reset` when dev mode is off |
+| 409 | Transition not allowed from the current status; or allowed but its guard isn't met (caller already accepted and tries to dispute, `needsReview` not empty on resolve, findings reviewed outside `Disputed`, upload or inspection in the wrong status, evidence changed before inspection) |
+| 413 | Evidence file over the size limit, or too many files in one upload |
+| 415 | Evidence file is not a JPEG or PNG |
 | 422 | Request body validation failure (Pydantic) |
+| 502 | The inspection provider failed or its output didn't validate (nothing stored) |
