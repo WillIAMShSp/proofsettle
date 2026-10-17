@@ -13,9 +13,7 @@ REVIEWED_AT = datetime(2026, 10, 16, 14, 0, tzinfo=UTC)
 
 
 def review(findings, finding_id, decision, current=Status.DISPUTED, actor=Actor.REVIEWER):
-    return [
-        review_finding(current, f, decision, actor, REVIEWED_AT) if f.id == finding_id else f for f in findings
-    ]
+    return [review_finding(current, f, decision, actor, REVIEWED_AT) if f.id == finding_id else f for f in findings]
 
 
 def test_buyer_disputes_063_reviewer_confirms_engine_resolves():

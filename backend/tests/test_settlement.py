@@ -42,7 +42,8 @@ def finding(id: str, confidence: float = 0.9, defect_type: str = "crack", **extr
 
 def reviewed(f: Finding, override: str) -> Finding:
     return Finding.model_validate(
-        f.model_dump(by_alias=False) | {"review_override": override, "reviewed_by": "Reviewer", "reviewed_at": REVIEWED_AT}
+        f.model_dump(by_alias=False)
+        | {"review_override": override, "reviewed_by": "Reviewer", "reviewed_at": REVIEWED_AT}
     )
 
 
@@ -52,7 +53,11 @@ def seed_with(**overrides: str) -> list[Finding]:
 
 
 TEN_AT_33_33 = terms(
-    quantity=10, unitPrice=33.33, invoiceAmount=333.30, compensation__amountPerUnit=33.33, compensation__maxCredit=333.30
+    quantity=10,
+    unitPrice=33.33,
+    invoiceAmount=333.30,
+    compensation__amountPerUnit=33.33,
+    compensation__maxCredit=333.30,
 )
 
 
@@ -74,6 +79,7 @@ class Case:
         return "needs_review" if self.needs_review else "ready"
 
 
+# fmt: off
 CASES = {
     "PS-1042 as seeded": Case(
         PS_1042_TERMS, list(PS_1042_FINDINGS), 3, "300", "9700", "3 × $100 = $300",
@@ -143,6 +149,7 @@ CASES = {
         counted=["fnd_001", "fnd_002", "fnd_003"],
     ),
 }
+# fmt: on
 
 
 @pytest.mark.parametrize("case", CASES.values(), ids=CASES.keys())
@@ -219,7 +226,9 @@ INVALID_FINDINGS = {
     "reviewed by a party": {"review_override": "confirmed", "reviewed_by": "Buyer", "reviewed_at": REVIEWED_AT},
     "unknown override": {"review_override": "maybe", "reviewed_by": "Reviewer", "reviewed_at": REVIEWED_AT},
     "naive review time": {
-        "review_override": "confirmed", "reviewed_by": "Reviewer", "reviewed_at": datetime(2026, 10, 16, 9, 0),
+        "review_override": "confirmed",
+        "reviewed_by": "Reviewer",
+        "reviewed_at": datetime(2026, 10, 16, 9, 0),
     },
     "defect type not a slug": {"defect_type": "Bent Flange"},
 }

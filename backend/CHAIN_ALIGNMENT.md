@@ -233,16 +233,29 @@ import hashlib, struct, uuid
 from solders.pubkey import Pubkey
 from solders.instruction import Instruction, AccountMeta
 
+
 def shipment_pda(program_id: Pubkey, shipment_uuid: uuid.UUID) -> Pubkey:
     return Pubkey.find_program_address([b"shipment", shipment_uuid.bytes], program_id)[0]
 
-def propose_ix(program_id, disc: bytes, shipment: Pubkey, authority: Pubkey,
-               confirmed_defects: int, findings_hash: bytes, explanation_hash: bytes) -> Instruction:
+
+def propose_ix(
+    program_id,
+    disc: bytes,
+    shipment: Pubkey,
+    authority: Pubkey,
+    confirmed_defects: int,
+    findings_hash: bytes,
+    explanation_hash: bytes,
+) -> Instruction:
     data = disc + struct.pack("<I32s32s", confirmed_defects, findings_hash, explanation_hash)
-    return Instruction(program_id, data, [
-        AccountMeta(shipment, is_signer=False, is_writable=True),
-        AccountMeta(authority, is_signer=True, is_writable=False),
-    ])
+    return Instruction(
+        program_id,
+        data,
+        [
+            AccountMeta(shipment, is_signer=False, is_writable=True),
+            AccountMeta(authority, is_signer=True, is_writable=False),
+        ],
+    )
 ```
 
 Account order must follow each `#[derive(Accounts)]` struct exactly. For example,

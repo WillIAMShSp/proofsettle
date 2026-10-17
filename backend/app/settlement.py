@@ -151,8 +151,10 @@ def _assumptions(terms: AgreementTerms) -> tuple[str, ...]:
         f"First {tolerance} defective unit{'s' if tolerance != 1 else ''} accepted without credit"
         if tolerance
         else "No defect tolerance: every confirmed defective unit is credited",
-        f"Credit rule taken unchanged from the signed agreement: {_usd(terms.compensation.amount_per_unit)} "
-        f"per defective unit, capped at {_usd(terms.compensation.max_credit)}",
+        (
+            f"Credit rule taken unchanged from the signed agreement: {_usd(terms.compensation.amount_per_unit)} "
+            f"per defective unit, capped at {_usd(terms.compensation.max_credit)}"
+        ),
     )
 
 

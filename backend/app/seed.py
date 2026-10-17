@@ -9,8 +9,8 @@ from app.terms import Acceptance, AgreementTerms, EvidenceRequirements, PerDefec
 PS_1042_TERMS = AgreementTerms(
     item_description="Machined metal component",
     quantity=100,
-    unit_price=Decimal("100"),
-    invoice_amount=Decimal("10000"),
+    unit_price=Decimal(100),
+    invoice_amount=Decimal(10000),
     evidence_requirements=EvidenceRequirements(
         min_dispatch_photos=4,
         min_receipt_photos=4,
@@ -23,8 +23,8 @@ PS_1042_TERMS = AgreementTerms(
     ),
     compensation=PerDefectiveUnit(
         type="per_defective_unit",
-        amount_per_unit=Decimal("100"),
-        max_credit=Decimal("10000"),
+        amount_per_unit=Decimal(100),
+        max_credit=Decimal(10000),
     ),
 )
 

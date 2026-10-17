@@ -20,14 +20,14 @@ def parse(d: dict) -> AgreementTerms:
 def test_seed_reproduces_ps_1042_rule():
     t = PS_1042_TERMS
     assert t.quantity == 100
-    assert t.invoice_amount == Decimal("10000")
+    assert t.invoice_amount == Decimal(10000)
     assert t.compensation.type == "per_defective_unit"
-    assert t.compensation.amount_per_unit == Decimal("100")
+    assert t.compensation.amount_per_unit == Decimal(100)
     assert t.acceptance.min_confidence == 0.85
     assert t.acceptance.defect_tolerance_units == 0
     # The frontend's numbers: 3 confirmed defects -> $300, $400 if #063 is confirmed.
-    assert 3 * t.compensation.amount_per_unit == Decimal("300")
-    assert 4 * t.compensation.amount_per_unit == Decimal("400")
+    assert 3 * t.compensation.amount_per_unit == Decimal(300)
+    assert 4 * t.compensation.amount_per_unit == Decimal(400)
 
 
 def test_money_is_decimal_internally():
@@ -69,7 +69,7 @@ def test_cents_serialize_as_number():
 def test_max_credit_equal_to_invoice_allowed():
     d = seed_json()
     d["compensation"]["maxCredit"] = d["invoiceAmount"]
-    assert parse(d).compensation.max_credit == Decimal("10000")
+    assert parse(d).compensation.max_credit == Decimal(10000)
 
 
 def test_tolerance_equal_to_quantity_allowed():
