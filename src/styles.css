@@ -149,6 +149,24 @@
   animation: preview-float 7s ease-in-out 1s infinite;
 }
 
+.shipment-progress-active {
+  position: relative;
+  overflow: hidden;
+}
+
+.shipment-progress-active::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, oklch(1 0 0 / 65%), transparent);
+  content: "";
+  animation: progress-flow 2.8s ease-in-out infinite;
+}
+
+.shipment-progress-current {
+  box-shadow: 0 0 10px oklch(0.72 0.22 300 / 50%);
+}
+
 [data-reveal="left"] {
   --reveal-x: -24px;
   --reveal-y: 0px;
@@ -176,8 +194,18 @@
   .hero-copy-enter,
   .hero-preview-enter,
   .preview-float,
-  .is-revealed {
+  .is-revealed,
+  .shipment-progress-active::after {
     animation: none;
+  }
+}
+
+@keyframes progress-flow {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(240%);
   }
 }
 
