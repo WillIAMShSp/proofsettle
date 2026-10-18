@@ -202,6 +202,21 @@ export type Verification = {
   verifiedAt: IsoDateTime;
 };
 
+/** One message in a shipment's Buyer ↔ Supplier thread. Not part of the audit chain. */
+export type ChatMessage = {
+  id: string;
+  shipmentId: string;
+  at: IsoDateTime;
+  authorRole: Role;
+  authorName: string;
+  body: string;
+  /** Sent by the signed-in account. */
+  mine: boolean;
+};
+
+/** Longest message the API accepts, after trimming. */
+export const MAX_MESSAGE_LENGTH = 2000;
+
 export type ResetResult = { shipments: string[] };
 
 export type NewShipment = { title: string; supplier: string; terms: AgreementTerms };
@@ -223,6 +238,9 @@ export interface Api {
   reviewFinding(findingId: string, decision: ReviewOverride): Promise<ShipmentDetail>;
   resolve(id: string): Promise<ShipmentDetail>;
   verifyAudit(id: string): Promise<Verification>;
+  listMessages(id: string): Promise<ChatMessage[]>;
+  /** Buyer or Supplier only; a Reviewer gets 403. */
+  sendMessage(id: string, body: string): Promise<ChatMessage>;
   devReset(): Promise<ResetResult>;
 }
 
@@ -327,5 +345,7 @@ export const httpApi: Api = {
     request("POST", `/findings/${enc(findingId)}/review`, { json: { decision } }),
   resolve: (id) => request("POST", `/shipments/${enc(id)}/resolve`),
   verifyAudit: (id) => request("POST", `/shipments/${enc(id)}/audit/verify`),
+  listMessages: (id) => request("GET", `/shipments/${enc(id)}/messages`),
+  sendMessage: (id, body) => request("POST", `/shipments/${enc(id)}/messages`, { json: { body } }),
   devReset: () => request("POST", "/dev/reset"),
 };

@@ -32,7 +32,7 @@ from app.config import settings
 from app.db import get_db
 from app.findings import Finding, ReviewOverride
 from app.inspection import InspectionProvider, MockProvider
-from app.models import AdjustmentRow, AuditEvent, ChainStatus, Evidence, FindingRow, Shipment
+from app.models import AdjustmentRow, AuditEvent, ChainStatus, ChatMessage, Evidence, FindingRow, Shipment
 from app.money import Money
 from app.schemas import CamelModel
 from app.seed_db import BUYER, reset_and_seed
@@ -76,6 +76,10 @@ class DisputeIn(CamelModel):
 
 class ReviewIn(CamelModel):
     decision: ReviewOverride
+
+
+class MessageIn(CamelModel):
+    body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
 
 # --- Response shapes ----------------------------------------------------------------------
@@ -157,6 +161,17 @@ class AuditOut(CamelModel):
     checked: int
     events: tuple[EventOut, ...]
     checks: tuple[EventCheck, ...]
+
+
+class MessageOut(CamelModel):
+    id: str
+    shipment_id: str
+    at: AwareDatetime
+    author_role: Actor
+    author_name: str
+    body: str
+    # Written by the caller's account, so the UI can put it on the right-hand side.
+    mine: bool
 
 
 # --- Builders -----------------------------------------------------------------------------
@@ -322,6 +337,28 @@ def _detail(s: Shipment, role: Actor) -> ShipmentDetail:
     )
 
 
+def _message(m: ChatMessage, account: Account) -> MessageOut:
+    # No user id means the test double or demo, where a role is the whole account.
+    mine = m.author_user_id == account.user_id if account.user_id else m.author_role is account.role
+    return MessageOut(
+        id=m.public_id,
+        shipment_id=m.shipment_id,
+        at=m.at,
+        author_role=m.author_role,
+        author_name=m.author_name,
+        body=m.body,
+        mine=mine,
+    )
+
+
+def _visible_shipment(db: Session, shipment_id: str, account: Account) -> Shipment:
+    """The bare shipment row, 404 when this account can't see it. Chat needs nothing else."""
+    s = db.get(Shipment, shipment_id)
+    if s is None or not _can_see(account, s):
+        raise HTTPException(404, f"Unknown shipment {shipment_id}")
+    return s
+
+
 def _committed(db: Session, shipment_id: str, account: Account) -> ShipmentDetail:
     db.commit()
     return _detail(_load(db, shipment_id, account), account.role)
@@ -370,6 +407,13 @@ def get_audit(shipment_id: str, db: Db, account: Role) -> AuditOut:
         events=tuple(_event(e) for e in s.events),
         checks=result.events,
     )
+
+
+@router.get("/shipments/{shipment_id}/messages")
+def list_messages(shipment_id: str, db: Db, account: Role) -> list[MessageOut]:
+    s = _visible_shipment(db, shipment_id, account)
+    rows = db.scalars(select(ChatMessage).where(ChatMessage.shipment_id == s.id).order_by(ChatMessage.id))
+    return [_message(m, account) for m in rows]
 
 
 @router.get("/evidence/{evidence_id}/file")
@@ -459,6 +503,25 @@ def review_finding(finding_id: str, body: ReviewIn, db: Db, account: Role) -> Sh
 def resolve(shipment_id: str, db: Db, account: Role) -> ShipmentDetail:
     ops.resolve_dispute(_load(db, shipment_id, account, lock=True), account.role, _now())
     return _committed(db, shipment_id, account)
+
+
+@router.post("/shipments/{shipment_id}/messages", status_code=201)
+def send_message(shipment_id: str, body: MessageIn, db: Db, account: Role) -> MessageOut:
+    """Buyer and Supplier talk; a Reviewer reads the thread for context but stays neutral."""
+    s = _visible_shipment(db, shipment_id, account)
+    if account.role not in (Actor.BUYER, Actor.SUPPLIER):
+        raise HTTPException(403, "Only the Buyer and Supplier can send messages")
+    m = ChatMessage(
+        shipment_id=s.id,
+        author_role=account.role,
+        author_user_id=account.user_id,
+        author_name=account.name or account.role.value,
+        body=body.body,
+        at=_now(),
+    )
+    db.add(m)
+    db.commit()
+    return _message(m, account)
 
 
 @router.post("/shipments/{shipment_id}/audit/verify")
