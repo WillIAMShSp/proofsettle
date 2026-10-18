@@ -28,10 +28,12 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices(
             "PROOFSETTLE_SUPABASE_ANON_KEY",
-            "SUPABASE_ANON_KEY",
-            "VITE_SUPABASE_ANON_KEY",
+            # The sb_publishable_ key is the one Supabase currently accepts. The legacy
+            # anon JWT in .env is rejected with "Invalid API key".
             "SUPABASE_PUBLISHABLE_KEY",
             "VITE_SUPABASE_PUBLISHABLE_KEY",
+            "SUPABASE_ANON_KEY",
+            "VITE_SUPABASE_ANON_KEY",
         ),
     )
     # Uploaded evidence files, named by evidence id.
