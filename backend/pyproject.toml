@@ -2,7 +2,7 @@
 name = "proofsettle-backend"
 version = "0.1.0"
 description = "ProofSettle API: agreements, evidence, settlement and audit"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.143.3",
     "psycopg[binary]>=3.3.6",

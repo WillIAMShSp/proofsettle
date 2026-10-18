@@ -27,6 +27,9 @@ dist-ssr
 .DS_Store
 *.suo
 *.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Python & Database
+.venv/
+*.db
+*.egg-info/
+__pycache__/
+storage/

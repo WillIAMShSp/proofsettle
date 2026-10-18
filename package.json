@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
+    "backend": "backend/.venv/Scripts/uvicorn app.main:app --app-dir backend --port 8000 --reload",
+    "backend:seed": "backend/.venv/Scripts/python -m app.seed_db",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
