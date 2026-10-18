@@ -105,6 +105,7 @@ class Shipment(Base):
     )
     adjustment: Mapped["AdjustmentRow | None"] = relationship(back_populates="shipment", uselist=False)
     events: Mapped[list["AuditEvent"]] = relationship(back_populates="shipment", order_by="AuditEvent.seq")
+    messages: Mapped[list["ChatMessage"]] = relationship(back_populates="shipment", order_by="ChatMessage.id")
 
 
 class Agreement(Base):
@@ -228,3 +229,29 @@ class AuditEvent(Base):
     @property
     def public_id(self) -> str:
         return f"evt_{self.id:02d}"
+
+
+class ChatMessage(Base):
+    """One message in a shipment's Buyer ↔ Supplier conversation.
+
+    Chat is not settlement state: it never moves a status or an amount, and it is not part
+    of the audit hash chain. It is scoped to the shipment, so whoever can see the shipment
+    can read it.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)  # served as "msg_01"
+    shipment_id: Mapped[str] = mapped_column(ForeignKey("shipments.id"), index=True)
+    author_role: Mapped[Actor] = mapped_column(_enum(Actor, "actor"))
+    # Null for the test double and the shared demo, like Shipment.buyer_user_id.
+    author_user_id: Mapped[str | None] = mapped_column(String(36))
+    author_name: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+    shipment: Mapped[Shipment] = relationship(back_populates="messages")
+
+    @property
+    def public_id(self) -> str:
+        return f"msg_{self.id:02d}"

@@ -7,6 +7,7 @@ import {
   USE_MOCK,
   httpApi,
   type Api,
+  type ChatMessage,
   type Role,
   type ShipmentDetail,
   type ShipmentSummary,
@@ -21,7 +22,12 @@ export const api: Api = USE_MOCK ? mockApi : httpApi;
 export const keys = {
   list: ["shipments"] as const,
   detail: (id: string, role: Role | null) => ["shipment", id, role] as const,
+  // `mine` on each message depends on the caller too.
+  messages: (id: string, role: Role | null) => ["messages", id, role] as const,
 };
+
+/** How often an open thread asks for new messages. Paused while the tab is hidden. */
+const MESSAGE_POLL_MS = 4000;
 
 export function useShipments() {
   const { role } = useStore();
@@ -86,6 +92,29 @@ export function useVerifyAudit(id: string) {
     mutationFn: () => api.verifyAudit(id),
     // Each evidence item's `verified` is stored by the run, so refresh the detail.
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shipment", id] }),
+  });
+}
+
+export function useMessages(id: string) {
+  const { role } = useStore();
+  return useQuery({
+    queryKey: keys.messages(id, role),
+    queryFn: () => api.listMessages(id),
+    enabled: role !== null,
+    refetchInterval: MESSAGE_POLL_MS,
+  });
+}
+
+/** Send with `send.mutate(body)`; the sent message is appended without waiting for a poll. */
+export function useSendMessage(id: string) {
+  const qc = useQueryClient();
+  const { role } = useStore();
+  return useMutation({
+    mutationFn: (body: string) => api.sendMessage(id, body),
+    onSuccess: (message) =>
+      qc.setQueryData<ChatMessage[]>(keys.messages(id, role), (list) =>
+        list?.some((m) => m.id === message.id) ? list : [...(list ?? []), message],
+      ),
   });
 }
 

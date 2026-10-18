@@ -9,6 +9,7 @@ import dispatchImg from "@/assets/dispatch.jpg";
 import receiptImg from "@/assets/receipt.jpg";
 import {
   ApiError,
+  MAX_MESSAGE_LENGTH,
   getStoredRole,
   type Actions,
   type Actor,
@@ -16,6 +17,7 @@ import {
   type AgreementTerms,
   type Api,
   type AuditEvent,
+  type ChatMessage,
   type Evidence,
   type Finding,
   type FindingOutcome,
@@ -64,6 +66,31 @@ function find(id: string): MockShipment {
   const s = load().find((x) => x.id === id);
   if (!s) throw new ApiError(404, `Unknown shipment ${id}`);
   return s;
+}
+
+// Chat lives beside the shipments, not in them, as on the backend. `mine` is set on read.
+const MESSAGES_KEY = "ps-mock-messages";
+type StoredMessage = Omit<ChatMessage, "mine">;
+
+let messageCache: StoredMessage[] | null = null;
+
+function loadMessages(): StoredMessage[] {
+  if (messageCache) return messageCache;
+  try {
+    const raw = localStorage.getItem(MESSAGES_KEY);
+    if (raw) return (messageCache = JSON.parse(raw) as StoredMessage[]);
+  } catch {
+    // unreadable storage: start with no messages
+  }
+  return (messageCache = []);
+}
+
+function saveMessages() {
+  try {
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(messageCache));
+  } catch {
+    // storage full or blocked: keep the in-memory state
+  }
 }
 
 function role(): Role {
@@ -554,9 +581,44 @@ export const mockApi: Api = {
     };
   },
 
+  // The mock has a role but no account, so a message is "mine" when this role sent it.
+  listMessages: async (id) => {
+    const r = role();
+    find(id);
+    return loadMessages()
+      .filter((m) => m.shipmentId === id)
+      .map((m) => ({ ...m, mine: m.authorRole === r }));
+  },
+
+  sendMessage: async (id, body) => {
+    const r = role();
+    find(id);
+    if (r === "Reviewer") throw new ApiError(403, "Only the Buyer and Supplier can send messages");
+    const text = body.trim();
+    if (!text || text.length > MAX_MESSAGE_LENGTH)
+      throw new ApiError(422, `A message is 1 to ${MAX_MESSAGE_LENGTH} characters`);
+    const all = loadMessages();
+    const m: StoredMessage = {
+      id: nextId(
+        "msg",
+        all.map((x) => x.id),
+      ),
+      shipmentId: id,
+      at: now(),
+      authorRole: r,
+      authorName: r,
+      body: text,
+    };
+    all.push(m);
+    saveMessages();
+    return { ...m, mine: true };
+  },
+
   devReset: async () => {
     cache = structuredClone(MOCK_SEED);
     save();
+    messageCache = [];
+    saveMessages();
     return { shipments: cache.map((s) => s.id) };
   },
 };
