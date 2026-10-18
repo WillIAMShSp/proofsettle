@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { USE_MOCK, isRole, type Role } from "@/lib/api";
+import { DEV_AUTH, USE_MOCK, isRole, type Role } from "@/lib/api";
 import { Logo, useStore } from "@/lib/store";
 import { fetchProfile, isSupabaseConfigured, supabase } from "@/lib/supabase";
 
@@ -208,9 +208,11 @@ function Login() {
           </form>
         )}
 
-        {USE_MOCK && (
+        {(USE_MOCK || DEV_AUTH) && (
           <div className={`mt-6 ${isSupabaseConfigured ? "border-t pt-5" : ""}`}>
-            <p className="mb-3 text-xs font-medium text-muted-foreground">Offline demo</p>
+            <p className="mb-3 text-xs font-medium text-muted-foreground">
+              {USE_MOCK ? "Offline demo" : "Local dev login (live API)"}
+            </p>
             <div className="space-y-2.5">
               {ROLES.map((role) => (
                 <button

@@ -78,7 +78,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Dev-Role"],
 )
 app.add_middleware(JSONCharsetMiddleware)
 app.include_router(router)

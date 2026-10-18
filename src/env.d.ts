@@ -5,6 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_API_URL?: string;
   /** "true" runs the app on the in-browser mock instead of the API. */
   readonly VITE_USE_MOCK?: string;
+  /** "true" signs in by role against a backend run with PROOFSETTLE_DEV_AUTH=true. */
+  readonly VITE_DEV_AUTH?: string;
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_ANON_KEY?: string;
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;

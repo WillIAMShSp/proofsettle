@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     max_evidence_files: int = 20
     # Enables POST /dev/reset, which drops every table and reloads the demo seed.
     dev_mode: bool = False
+    # Local dev only: accept `X-Dev-Role: Buyer|Supplier|Reviewer` in place of a Supabase
+    # session, for when Supabase sign-up is unavailable. Lets any caller act as any role.
+    dev_auth: bool = False
 
     # --- Solana anchoring (app/chain). Off unless the RPC URL and all four keypairs are set.
     # JSON-RPC endpoint, e.g. https://api.devnet.solana.com or http://127.0.0.1:8899.

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ROLE_KEY, USE_MOCK, getStoredRole, isRole, type Role, type Status } from "./api";
+import { DEV_AUTH, ROLE_KEY, USE_MOCK, getStoredRole, isRole, type Role, type Status } from "./api";
 import { fetchProfile, isSupabaseConfigured, supabase } from "./supabase";
 
 export { STATUSES, type Role, type Status } from "./api";
@@ -23,8 +23,11 @@ type Ctx = {
 
 const C = createContext<Ctx | null>(null);
 
+// Mock mode and dev login keep the picked role in localStorage; Supabase keeps real sessions.
+const LOCAL_ROLE = USE_MOCK || DEV_AUTH;
+
 function rememberMockRole(user: SessionUser | null) {
-  if (!USE_MOCK) return;
+  if (!LOCAL_ROLE) return;
   try {
     if (user) localStorage.setItem(ROLE_KEY, user.role);
     else localStorage.removeItem(ROLE_KEY);
@@ -68,11 +71,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const boot = async () => {
       try {
+        let sessionUser = null;
         if (isSupabaseConfigured) {
           const { data } = await supabase.auth.getSession();
-          const sessionUser = data.session?.user;
+          sessionUser = data.session?.user ?? null;
           if (sessionUser) await applyProfile(sessionUser.id, sessionUser.email ?? "");
-        } else if (USE_MOCK) {
+        }
+        if (!sessionUser && LOCAL_ROLE) {
           const role = getStoredRole();
           if (role) setUser({ id: `demo-${role}`, email: "", name: role, role });
         }
@@ -89,6 +94,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT" || !session?.user) {
+        // No Supabase session is normal for a mock or dev-login user; keep them signed in.
+        if (event !== "SIGNED_OUT" && LOCAL_ROLE && getStoredRole()) return;
         setUserState(null);
         return;
       }

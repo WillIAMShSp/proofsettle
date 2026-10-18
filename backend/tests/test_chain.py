@@ -1,7 +1,10 @@
 """app.chain without a network: the IDL codec, and the plan of program instructions."""
 
 import base64
+import email.message
 import hashlib
+import io
+import urllib.error
 
 import pytest
 from solders.keypair import Keypair
@@ -11,7 +14,7 @@ from app.audit import ANCHORED_EVENT_TYPES, EventType
 from app.chain.anchoring import cents, expected_state, plan
 from app.chain.codec import CodecError, load_idl
 from app.chain.program import CHAIN_STATUS, Chain, Signer
-from app.chain.rpc import SolanaRpc, TransactionFailed
+from app.chain.rpc import RpcError, SolanaRpc, TransactionFailed
 from app.hashing import to_chain_bytes
 from app.models import Shipment
 from app.routes import _load
@@ -221,3 +224,60 @@ def test_unknown_event_shapes_are_refused(db):
     event.payload = {"status": {"from": "In Transit", "to": "Inspection"}}
     with pytest.raises(UnmappedEvent):
         plan(s, make_chain())
+
+
+def _http_error(code: int, retry_after: str | None = None) -> urllib.error.HTTPError:
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError("http://rpc", code, "error", headers, io.BytesIO(b""))
+
+
+class _RpcResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return b'{"jsonrpc": "2.0", "id": 1, "result": 42}'
+
+
+def test_rpc_resends_after_rate_limiting(monkeypatch):
+    answers = [_http_error(429, "3"), _http_error(429), _RpcResponse()]
+    waits: list[float] = []
+
+    def urlopen(request, timeout):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr("app.chain.rpc.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("app.chain.rpc.time.sleep", waits.append)
+    assert SolanaRpc("http://rpc").call("getBlockHeight", []) == 42
+    assert waits == [3.0, 2.0]  # Retry-After, then 2**attempt
+
+
+def test_rpc_gives_up_after_repeated_rate_limiting(monkeypatch):
+    def urlopen(request, timeout):
+        raise _http_error(429)
+
+    monkeypatch.setattr("app.chain.rpc.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("app.chain.rpc.time.sleep", lambda s: None)
+    with pytest.raises(RpcError, match="429"):
+        SolanaRpc("http://rpc").call("getBlockHeight", [])
+
+
+def test_rpc_does_not_retry_other_http_errors(monkeypatch):
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(request)
+        raise _http_error(500)
+
+    monkeypatch.setattr("app.chain.rpc.urllib.request.urlopen", urlopen)
+    with pytest.raises(RpcError, match="500"):
+        SolanaRpc("http://rpc").call("getBlockHeight", [])
+    assert len(calls) == 1

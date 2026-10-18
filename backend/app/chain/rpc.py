@@ -18,6 +18,10 @@ from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 
 COMMITMENT = "confirmed"
+# Public RPCs (api.devnet.solana.com) answer bursts with HTTP 429. The request was not
+# processed, so it is safe to resend, sendTransaction included (same signed bytes).
+RATE_LIMIT_RETRIES = 5
+RATE_LIMIT_MAX_WAIT_S = 10.0
 
 
 class RpcError(Exception):
@@ -40,6 +44,16 @@ class TransactionFailed(RpcError):
         return None
 
 
+def _retry_after(error: urllib.error.HTTPError, attempt: int) -> float:
+    """Seconds to wait before resending: the server's Retry-After, else 1, 2, 4, 8, ..."""
+    header = error.headers.get("Retry-After") if error.headers else None
+    try:
+        wait = float(header) if header else 2.0**attempt
+    except ValueError:
+        wait = 2.0**attempt
+    return min(max(wait, 0.0), RATE_LIMIT_MAX_WAIT_S)
+
+
 @dataclass(frozen=True)
 class Blockhash:
     hash: Hash
@@ -56,11 +70,17 @@ class SolanaRpc:
         self._id += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}).encode()
         req = urllib.request.Request(self.url, data=body, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-            raise RpcError(f"{method}: {e}") from e
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429 or attempt == RATE_LIMIT_RETRIES:
+                    raise RpcError(f"{method}: {e}") from e
+                time.sleep(_retry_after(e, attempt))
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+                raise RpcError(f"{method}: {e}") from e
         if "error" in payload:
             err = payload["error"]
             logs = tuple((err.get("data") or {}).get("logs") or ())

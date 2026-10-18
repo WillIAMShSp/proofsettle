@@ -89,6 +89,18 @@ def test_demo_role_header_is_not_a_session(client):
     assert "bearer" in response.json()["detail"].lower()
 
 
+def test_dev_role_header_needs_dev_auth(client):
+    app.dependency_overrides.pop(current_actor)
+    assert client.get("/shipments", headers={"X-Dev-Role": "Buyer"}).status_code == 401
+
+
+def test_dev_role_header_with_dev_auth(client, monkeypatch):
+    app.dependency_overrides.pop(current_actor)
+    monkeypatch.setattr(settings, "dev_auth", True)
+    assert client.get("/shipments", headers={"X-Dev-Role": "Buyer"}).status_code == 200
+    assert client.get("/shipments", headers={"X-Dev-Role": "Auditor"}).status_code == 403
+
+
 def test_missing_token_is_401(client):
     app.dependency_overrides.pop(current_actor)
     assert client.get("/shipments").status_code == 401
@@ -136,3 +148,74 @@ def test_supabase_user_id_must_be_a_uuid(client, monkeypatch):
     monkeypatch.setattr("app.auth.urllib.request.urlopen", lambda request, timeout=10: _Response())
     response = client.get("/shipments", headers={"Authorization": "Bearer token"})
     assert response.status_code == 401
+
+
+def _fake_supabase(monkeypatch, routes):
+    """Answer Supabase GETs by path prefix; record each request."""
+    seen = []
+
+    class _Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def urlopen(request, timeout=10):
+        seen.append(request)
+        path = request.full_url.removeprefix("https://example.supabase.co")
+        for prefix, answer in routes.items():
+            if path.startswith(prefix):
+                if isinstance(answer, Exception):
+                    raise answer
+                return _Response(answer)
+        raise AssertionError(f"unexpected Supabase call {path}")
+
+    monkeypatch.setattr(settings, "supabase_url", "https://example.supabase.co")
+    monkeypatch.setattr(settings, "supabase_anon_key", "anon-key")
+    monkeypatch.setattr("app.auth.urllib.request.urlopen", urlopen)
+    return seen
+
+
+USER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+
+def test_sqlite_reads_the_profile_through_supabase_rest(client, monkeypatch):
+    app.dependency_overrides.pop(current_actor)
+    seen = _fake_supabase(
+        monkeypatch,
+        {"/auth/v1/user": {"id": USER_ID}, "/rest/v1/profiles": [{"role": "Supplier"}]},
+    )
+    response = client.get("/shipments", headers={"Authorization": "Bearer session-token"})
+    assert response.status_code == 200
+    profile_request = seen[1]
+    assert profile_request.full_url.endswith(f"/rest/v1/profiles?select=role&id=eq.{USER_ID}")
+    assert profile_request.get_header("Authorization") == "Bearer session-token"
+
+
+def test_sqlite_without_a_profile_row_is_403(client, monkeypatch):
+    app.dependency_overrides.pop(current_actor)
+    _fake_supabase(monkeypatch, {"/auth/v1/user": {"id": USER_ID}, "/rest/v1/profiles": []})
+    response = client.get("/shipments", headers={"Authorization": "Bearer session-token"})
+    assert response.status_code == 403
+
+
+def test_rejected_api_key_is_a_config_error_not_a_bad_session(client, monkeypatch):
+    app.dependency_overrides.pop(current_actor)
+    bad_key = urllib.error.HTTPError(
+        "https://example.supabase.co/auth/v1/user",
+        401,
+        "unauthorized",
+        None,  # type: ignore[arg-type]
+        io.BytesIO(b'{"message":"Invalid API key"}'),
+    )
+    _fake_supabase(monkeypatch, {"/auth/v1/user": bad_key})
+    response = client.get("/shipments", headers={"Authorization": "Bearer session-token"})
+    assert response.status_code == 503
+    assert "API key" in response.json()["detail"]

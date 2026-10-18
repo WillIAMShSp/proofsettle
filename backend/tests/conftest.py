@@ -9,6 +9,7 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth import current_actor
+from app.chain import set_chain
 from app.db import get_db, make_engine
 from app.main import app
 from app.routes import evidence_dir
@@ -21,6 +22,15 @@ def test_actor(x_demo_role: Annotated[str | None, Header()] = None) -> Actor:
     if x_demo_role not in {role.value for role in (Actor.BUYER, Actor.SUPPLIER, Actor.REVIEWER)}:
         raise HTTPException(400, "X-Demo-Role header must be Buyer, Supplier or Reviewer")
     return Actor(x_demo_role)
+
+
+@pytest.fixture(autouse=True)
+def no_configured_chain() -> Iterator[None]:
+    """Keep a developer's backend/.env (a live Solana RPC) out of the tests. Tests that need a
+    chain install one with set_chain, as test_chain_live does."""
+    set_chain(None)
+    yield
+    set_chain(None)
 
 
 @pytest.fixture

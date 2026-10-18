@@ -256,9 +256,13 @@ export const ROLE_KEY = "ps-role";
 /** Offline demo (`VITE_USE_MOCK=true`) keeps the role in localStorage. The HTTP API does not. */
 export const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
+/** Local dev login (`VITE_DEV_AUTH=true`): pick a role and send it to the real API as
+ * `X-Dev-Role`. The backend accepts it only when run with PROOFSETTLE_DEV_AUTH=true. */
+export const DEV_AUTH = !USE_MOCK && import.meta.env.VITE_DEV_AUTH === "true";
+
 export const isRole = (value: unknown): value is Role => ROLES.includes(value as Role);
 
-/** Mock-mode role only. Null on the server, and unused by `httpApi`. */
+/** Mock-mode or dev-login role. Null on the server. */
 export function getStoredRole(): Role | null {
   if (typeof window === "undefined") return null;
   try {
@@ -290,10 +294,13 @@ function detailText(body: unknown, fallback: string): string {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  if (!isSupabaseConfigured) return {};
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  if (isSupabaseConfigured) {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) return { Authorization: `Bearer ${token}` };
+  }
+  const devRole = DEV_AUTH ? getStoredRole() : null;
+  return devRole ? { "X-Dev-Role": devRole } : {};
 }
 
 async function request<T>(method: "GET" | "POST", path: string, body?: Body): Promise<T> {
