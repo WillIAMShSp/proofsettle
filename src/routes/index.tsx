@@ -33,6 +33,10 @@ const steps = [
 
 const progress = ["Draft", "Agreed", "In Transit", "Inspection", "Proposed", "Accepted"];
 
+function scrollToSteps() {
+  document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function ProductPreview() {
   return (
     <div aria-hidden className="overflow-hidden rounded-[1.25rem] border bg-background">
@@ -128,17 +132,18 @@ function ProductPreview() {
 function Landing() {
   return (
     <div className="relative min-h-screen">
-      <div className="hero-atmosphere pointer-events-none absolute inset-x-0 top-0 h-[880px]" />
+      <div className="hero-atmosphere pointer-events-none absolute inset-x-0 top-0 h-svh" />
 
       <nav className="relative z-10 mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
         <Logo />
         <div className="flex items-center gap-5 sm:gap-6">
-          <a
-            href="#how-it-works"
-            className="hidden text-sm text-muted-foreground transition-colors hover:text-foreground md:inline"
+          <button
+            type="button"
+            onClick={scrollToSteps}
+            className="hidden cursor-pointer text-sm text-muted-foreground transition-colors hover:text-foreground md:inline"
           >
             How it works
-          </a>
+          </button>
           <Link
             to="/login"
             className="text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -154,7 +159,7 @@ function Landing() {
         </div>
       </nav>
 
-      <section className="relative z-10 mx-auto grid max-w-6xl items-center gap-14 px-6 pb-20 pt-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-12 lg:pb-28 lg:pt-14">
+      <section className="relative z-10 mx-auto grid min-h-[calc(100svh-4rem)] max-w-6xl items-center gap-14 px-6 pb-16 pt-8 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-12 lg:pb-20">
         <div className="fade-up">
           <p className="inline-flex items-center gap-2 rounded-full border bg-card/80 px-3 py-1 text-xs text-muted-foreground">
             <span className="h-1.5 w-1.5 rounded-full bg-sol" />
@@ -177,12 +182,13 @@ function Landing() {
             >
               Open demo
             </Link>
-            <a
-              href="#how-it-works"
-              className="inline-flex rounded-full border px-7 py-3 text-sm font-medium transition-colors hover:bg-card"
+            <button
+              type="button"
+              onClick={scrollToSteps}
+              className="inline-flex cursor-pointer rounded-full border px-7 py-3 text-sm font-medium transition-colors hover:bg-card"
             >
               How it works
-            </a>
+            </button>
           </div>
           <div className="mt-12 flex gap-8 sm:gap-10">
             <div>
