@@ -1,8 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { USE_MOCK, isRole, type Role } from "@/lib/api";
+import { signIn, signUp } from "@/lib/auth";
+import { USE_MOCK, type Role } from "@/lib/api";
 import { Logo, useStore } from "@/lib/store";
-import { fetchProfile, isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { isSupabaseConfigured } from "@/lib/supabase";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -41,32 +42,13 @@ function Login() {
     setInfo(null);
     setLoading(true);
     try {
-      const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
-      if (signUpError) {
-        setError(signUpError.message);
-        return;
-      }
-      const user = data.user;
-      if (!user) {
-        setError("No user returned from Supabase.");
-        return;
-      }
-      const displayName = name.trim() || email.split("@")[0] || "User";
-      const { error: upsertErr } = await supabase.from("profiles").upsert({
-        id: user.id,
-        name: displayName,
-        role: roleSelect,
-      });
-      if (upsertErr) {
-        setError(upsertErr.message);
-        return;
-      }
-      if (!data.session) {
-        setInfo("Account created. Check your email to confirm signup, then sign in.");
+      const result = await signUp({ email, password, name, role: roleSelect });
+      if (result.pendingConfirmation) {
+        setInfo(result.message);
         setMode("sign-in");
         return;
       }
-      setUser({ id: user.id, email: user.email ?? email, name: displayName, role: roleSelect });
+      setUser(result.account);
       nav({ to: "/dashboard" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -81,30 +63,7 @@ function Login() {
     setInfo(null);
     setLoading(true);
     try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (signInError) {
-        setError(signInError.message);
-        return;
-      }
-      const user = data.user;
-      if (!user) {
-        setError("No user returned from Supabase.");
-        return;
-      }
-      const profile = await fetchProfile(user.id);
-      if (!profile || !isRole(profile.role)) {
-        setError("This account needs a Buyer, Supplier or Reviewer profile.");
-        return;
-      }
-      setUser({
-        id: user.id,
-        email: user.email ?? email,
-        name: profile.name || email,
-        role: profile.role,
-      });
+      setUser(await signIn({ email, password }));
       nav({ to: "/dashboard" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

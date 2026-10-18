@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ROLE_KEY, USE_MOCK, getStoredRole, isRole, type Role, type Status } from "./api";
-import { fetchProfile, isSupabaseConfigured, supabase } from "./supabase";
+import { restoreAccount, signOutAccount, subscribeToAccount } from "./auth";
+import { ROLE_KEY, USE_MOCK, getStoredRole, type Role, type Status } from "./api";
+import { isSupabaseConfigured } from "./supabase";
 
 export { STATUSES, type Role, type Status } from "./api";
 
@@ -43,7 +44,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    if (isSupabaseConfigured) await supabase.auth.signOut();
+    await signOutAccount();
     try {
       localStorage.removeItem(ROLE_KEY);
     } catch {
@@ -55,23 +56,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancel = false;
 
-    const applyProfile = async (id: string, email: string) => {
-      const profile = await fetchProfile(id);
-      if (cancel || !profile || !isRole(profile.role)) return;
-      setUser({
-        id,
-        email,
-        name: profile.name || email || profile.role,
-        role: profile.role,
-      });
-    };
-
     const boot = async () => {
       try {
         if (isSupabaseConfigured) {
-          const { data } = await supabase.auth.getSession();
-          const sessionUser = data.session?.user;
-          if (sessionUser) await applyProfile(sessionUser.id, sessionUser.email ?? "");
+          const account = await restoreAccount();
+          if (!cancel && account) setUser(account);
         } else if (USE_MOCK) {
           const role = getStoredRole();
           if (role) setUser({ id: `demo-${role}`, email: "", name: role, role });
@@ -82,23 +71,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     void boot();
 
-    if (!isSupabaseConfigured)
-      return () => {
-        cancel = true;
-      };
-
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT" || !session?.user) {
-        setUserState(null);
-        return;
-      }
-      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "USER_UPDATED") {
-        void applyProfile(session.user.id, session.user.email ?? "");
-      }
+    const unsubscribe = subscribeToAccount((account) => {
+      if (!cancel) setUser(account);
     });
     return () => {
       cancel = true;
-      sub.subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
 

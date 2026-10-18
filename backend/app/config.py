@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     # Postgres URL, e.g. postgresql+psycopg://user:pass@host:5432/postgres.
     # On Postgres, workflow tables are created in the `proofsettle` schema, not `public`.
     database_url: str = "sqlite:///./proofsettle.db"
-    # Used only to verify access tokens (GET /auth/v1/user). The role is then read from
-    # public.profiles with the database connection, not from a request header.
+    # Used to verify access tokens (GET /auth/v1/user) and to read public.profiles
+    # through PostgREST as that user. The workflow database is only a fallback.
     supabase_url: str = Field(
         default="",
         validation_alias=AliasChoices("PROOFSETTLE_SUPABASE_URL", "SUPABASE_URL", "VITE_SUPABASE_URL"),

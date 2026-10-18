@@ -38,12 +38,17 @@ their real SHA-256.
 - Hashes are **lowercase hex SHA-256** (64 chars). The frontend's `hashOf` is a fake
   FNV-based function that also yields 64 hex chars, so `short()` keeps working unchanged.
 - Caller identity is a Supabase access token: `Authorization: Bearer <token>`. The API
-  checks the token with Supabase Auth (`GET /auth/v1/user`) and reads
-  `public.profiles.role`, which must be `Buyer`, `Supplier` or `Reviewer` (`401` with no
-  or an invalid token, `403` when the profile is missing or has another role, `503` when
-  Auth or the profile table can't be reached). `X-Demo-Role` is ignored. `GET
+  checks the token with Supabase Auth (`GET /auth/v1/user`), then reads
+  `public.profiles.role` through PostgREST as that user (`GET /rest/v1/profiles`), so
+  row level security on `public.profiles` applies. If PostgREST returns no row, the API
+  falls back to SQL on its own database connection (a superuser bypasses RLS; local
+  SQLite cannot see `public.profiles`). The role must be `Buyer`, `Supplier` or
+  `Reviewer` (`401` with no or an invalid token, `403` when the profile is missing,
+  hidden by RLS, or has another role, `503` when Auth or both profile reads can't be
+  reached). `user_metadata.role` is not an authority. `X-Demo-Role` is ignored. `GET
   /evidence/{id}/file` is exempt, because an `<img src>` can't send headers. `Reviewer`
-  resolves disputes and is included on the login screen.
+  resolves disputes and is included on the login screen. Apply `supabase/auth.sql` so
+  the signed-in user can see their own profile row.
 
 ## Types (verbatim from `src/lib/store.tsx`)
 

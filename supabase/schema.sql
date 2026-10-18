@@ -60,6 +60,9 @@ create table if not exists public.profiles (
   created_at timestamptz default now()
 );
 
+-- Login policies are not applied here. supabase/auth.sql enables row level
+-- security on public.profiles only. Leave the other public tables without RLS.
+
 -- 3. SHIPMENTS
 create table if not exists public.shipments (
   id text primary key, -- e.g. 'PS-1042'
