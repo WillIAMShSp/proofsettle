@@ -63,7 +63,9 @@
 }
 
 @layer base {
-  * { border-color: var(--color-border); }
+  * {
+    border-color: var(--color-border);
+  }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
@@ -72,7 +74,9 @@
   }
 }
 
-@utility bg-sol { background-image: var(--gradient-sol); }
+@utility bg-sol {
+  background-image: var(--gradient-sol);
+}
 @utility text-sol {
   background-image: var(--gradient-sol);
   -webkit-background-clip: text;
@@ -83,21 +87,150 @@
   background-color: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2xl);
-  transition: box-shadow 0.3s ease, border-color 0.3s ease;
-  &:hover { box-shadow: var(--glow); }
+  transition:
+    box-shadow 0.3s ease,
+    border-color 0.3s ease;
+  &:hover {
+    box-shadow: var(--glow);
+  }
 }
-@utility fade-up { animation: fade-up 0.6s ease both; }
+@utility fade-up {
+  animation: fade-up 0.6s ease both;
+}
 @utility hero-atmosphere {
   background-image:
     radial-gradient(ellipse 50% 42% at 76% 38%, oklch(0.58 0.25 300 / 28%), transparent 68%),
     radial-gradient(ellipse 36% 32% at 90% 68%, oklch(0.86 0.2 158 / 16%), transparent 70%),
     linear-gradient(to right, oklch(1 0 0 / 5%) 1px, transparent 1px),
     linear-gradient(to bottom, oklch(1 0 0 / 5%) 1px, transparent 1px);
-  background-size: auto, auto, 72px 72px, 72px 72px;
+  background-size:
+    auto,
+    auto,
+    72px 72px,
+    72px 72px;
   mask-image: radial-gradient(ellipse 85% 75% at 68% 32%, black 10%, transparent 74%);
 }
 
+.cursor-glow {
+  position: fixed;
+  z-index: 0;
+  top: 0;
+  left: 0;
+  width: 28rem;
+  height: 28rem;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    oklch(0.58 0.25 300 / 12%) 0%,
+    oklch(0.58 0.25 300 / 6%) 38%,
+    oklch(0.86 0.2 158 / 4%) 58%,
+    transparent 72%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, -50%, 0);
+  transition:
+    opacity 350ms ease,
+    transform 140ms cubic-bezier(0.2, 0.75, 0.25, 1);
+  will-change: transform;
+}
+
+.hero-copy-enter,
+.hero-preview-enter {
+  animation: hero-enter 850ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.hero-preview-enter {
+  animation-name: hero-enter-right;
+  animation-delay: 140ms;
+}
+
+.preview-float {
+  animation: preview-float 7s ease-in-out 1s infinite;
+}
+
+[data-reveal="left"] {
+  --reveal-x: -24px;
+  --reveal-y: 0px;
+}
+[data-reveal="right"] {
+  --reveal-x: 24px;
+  --reveal-y: 0px;
+}
+[data-reveal="up"] {
+  --reveal-x: 0px;
+  --reveal-y: 22px;
+}
+
+.is-revealed {
+  animation: reveal-in 700ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+@media (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .cursor-glow {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-copy-enter,
+  .hero-preview-enter,
+  .preview-float,
+  .is-revealed {
+    animation: none;
+  }
+}
+
+@keyframes hero-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(-28px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes hero-enter-right {
+  from {
+    opacity: 0;
+    transform: translate3d(28px, 0, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes preview-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translate3d(var(--reveal-x, 0), var(--reveal-y, 18px), 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
