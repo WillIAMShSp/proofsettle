@@ -1,8 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Read environment variables (Vite uses import.meta.env)
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+// Read environment variables using bracket notation to satisfy noPropertyAccessFromIndexSignature
+const env = import.meta.env;
+const supabaseUrl = (env["VITE_SUPABASE_URL"] as string | undefined) || "";
+const supabaseAnonKey =
+  (env["VITE_SUPABASE_ANON_KEY"] as string | undefined) ||
+  (env["VITE_SUPABASE_PUBLISHABLE_KEY"] as string | undefined) ||
+  "";
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
@@ -31,82 +35,88 @@ export type DbOrganization = {
   id: string;
   name: string;
   org_type: "buyer" | "supplier";
-  created_at?: string;
+  created_at?: string | undefined;
 };
 
 export type DbAgreement = {
   id: string;
   shipment_id: string;
-  goods_description: string;
-  unit_count: number;
-  credit_per_defect: number;
-  min_confidence_threshold: number;
-  terms_json?: Record<string, unknown>;
-  terms_hash: string;
-  buyer_approved: boolean;
-  supplier_approved: boolean;
-  buyer_approved_at?: string;
-  supplier_approved_at?: string;
+  goods_description?: string | undefined;
+  unit_count?: number | undefined;
+  credit_per_defect?: number | undefined;
+  min_confidence_threshold?: number | undefined;
+  terms_json?: Record<string, unknown> | undefined;
+  terms_hash?: string | null | undefined;
+  buyer_approved?: boolean | undefined;
+  supplier_approved?: boolean | undefined;
+  buyer_approved_at?: string | null | undefined;
+  supplier_approved_at?: string | null | undefined;
 };
 
 export type DbEvidence = {
   id: string;
   shipment_id: string;
-  evidence_type: "dispatch" | "receipt" | "invoice" | "po";
-  file_name: string;
-  file_url: string;
-  sha256: string;
+  evidence_type: string;
+  file_name?: string | undefined;
+  file_path?: string | undefined;
+  file_url?: string | undefined;
+  sha256?: string | undefined;
+  sha256_client?: string | null | undefined;
   created_at: string;
 };
 
 export type DbInspection = {
   id: string;
-  shipment_id: string;
-  evidence_id?: string;
-  item_label: string;
-  issue: string;
-  confidence: number;
-  confirmed: boolean;
-  review_status: string;
+  shipment_id?: string | undefined;
+  evidence_id?: string | undefined;
+  item_label?: string | undefined;
+  issue?: string | undefined;
+  confidence?: number | null | undefined;
+  confirmed?: boolean | undefined;
+  review_status?: string | undefined;
 };
 
 export type DbAdjustment = {
   id: string;
   shipment_id: string;
   rule_id: string;
-  defects_count: number;
-  rate_per_defect: number;
+  defects_count?: number | undefined;
+  rate_per_defect?: number | undefined;
   proposed_amount: number;
-  explanation: string;
-  status: "Pending" | "Accepted" | "Disputed";
+  explanation?: string | null | undefined;
+  status: "Pending" | "Accepted" | "Disputed" | string;
 };
 
 export type DbAuditEvent = {
   id: string;
   shipment_id: string;
-  actor: string;
-  event_text: string;
+  actor?: string | undefined;
+  event_text?: string | undefined;
+  event_type?: string | undefined;
   payload_hash: string;
-  tx_hash?: string;
+  tx_hash?: string | null | undefined;
   created_at: string;
 };
 
 export type DbShipmentWithRelations = {
   id: string;
-  title: string;
-  buyer_id?: string;
-  supplier_id?: string;
+  title?: string | undefined;
+  item_description?: string | undefined;
+  buyer_id?: string | undefined;
+  supplier_id?: string | undefined;
+  buyer_org_id?: string | undefined;
+  supplier_org_id?: string | undefined;
   invoice_amount: number;
   status: string;
-  dispute_reason?: string;
+  dispute_reason?: string | null | undefined;
   created_at: string;
-  buyer?: DbOrganization;
-  supplier?: DbOrganization;
-  agreements?: DbAgreement[];
-  evidence?: DbEvidence[];
-  inspections?: DbInspection[];
-  adjustments?: DbAdjustment[];
-  audit_events?: DbAuditEvent[];
+  buyer?: DbOrganization | undefined;
+  supplier?: DbOrganization | undefined;
+  agreements?: DbAgreement[] | undefined;
+  evidence?: DbEvidence[] | undefined;
+  inspections?: DbInspection[] | undefined;
+  adjustments?: DbAdjustment[] | undefined;
+  audit_events?: DbAuditEvent[] | undefined;
 };
 
 /**
@@ -120,8 +130,6 @@ export async function fetchShipments(): Promise<DbShipmentWithRelations[] | null
       .from("shipments")
       .select(`
         *,
-        buyer:buyer_id(id, name, org_type),
-        supplier:supplier_id(id, name, org_type),
         agreements(*),
         evidence(*),
         inspections(*),
@@ -147,7 +155,7 @@ export async function fetchShipments(): Promise<DbShipmentWithRelations[] | null
 export async function submitSupplierDecision(
   shipmentId: string,
   decision: "Accepted" | "Disputed",
-  reason?: string,
+  reason?: string | undefined,
   actor: string = "Supplier"
 ): Promise<{ success: boolean; hash: string }> {
   const eventText = decision === "Accepted"
@@ -247,7 +255,9 @@ export async function uploadEvidenceFile(
       evidence_type: type,
       file_name: file.name,
       file_url: urlData.publicUrl,
+      file_path: filePath,
       sha256,
+      sha256_client: sha256,
     });
 
     return { fileUrl: urlData.publicUrl, sha256 };

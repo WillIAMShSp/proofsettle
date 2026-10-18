@@ -22,12 +22,12 @@ export const STATUSES = [
 export type Status = (typeof STATUSES)[number];
 
 export type AuditEvent = {
-  id?: string;
+  id?: string | undefined;
   at: string;
   actor: string;
   text: string;
   hash: string;
-  tx_hash?: string;
+  tx_hash?: string | undefined;
 };
 
 export type Finding = {
@@ -44,13 +44,13 @@ export type Shipment = {
   supplier: string;
   amount: number;
   status: Status;
-  disputeReason?: string;
+  disputeReason?: string | undefined;
   events: AuditEvent[];
-  creditRule?: number;
-  findings?: Finding[];
-  goodsDescription?: string;
-  buyerApproved?: boolean;
-  supplierApproved?: boolean;
+  creditRule?: number | undefined;
+  findings?: Finding[] | undefined;
+  goodsDescription?: string | undefined;
+  buyerApproved?: boolean | undefined;
+  supplierApproved?: boolean | undefined;
 };
 
 // Fast synchronous hash for instant UI fallback
@@ -147,33 +147,33 @@ function mapDbShipment(db: DbShipmentWithRelations): Shipment {
       hour: "2-digit",
       minute: "2-digit",
     }),
-    actor: e.actor,
-    text: e.event_text,
+    actor: e.actor || "System",
+    text: e.event_text || e.event_type || "Event logged",
     hash: e.payload_hash,
-    tx_hash: e.tx_hash,
+    tx_hash: (e.tx_hash as string | undefined) ?? undefined,
   }));
 
   const findings: Finding[] = (db.inspections || []).map((i) => ({
-    item: i.item_label,
-    issue: i.issue,
-    conf: Number(i.confidence),
+    item: i.item_label || "Inspection Item",
+    issue: i.issue || "Visual discrepancy",
+    conf: Number(i.confidence ?? 0.9),
     confirmed: Boolean(i.confirmed),
   }));
 
   return {
     id: db.id,
-    title: db.title,
-    buyer: db.buyer?.name || "Buyer Org",
-    supplier: db.supplier?.name || "Supplier Org",
+    title: db.title || db.item_description || "100 metal components",
+    buyer: db.buyer?.name || "Northgate Assembly Ltd",
+    supplier: db.supplier?.name || "Ferro Precision Works",
     amount: Number(db.invoice_amount),
-    status: db.status as Status,
-    disputeReason: db.dispute_reason,
+    status: (STATUSES.includes(db.status as Status) ? db.status : "Proposed") as Status,
+    disputeReason: db.dispute_reason ?? undefined,
     events: auditEvents,
     creditRule: agreement?.credit_per_defect ? Number(agreement.credit_per_defect) : 100,
-    goodsDescription: agreement?.goods_description || "Components",
+    goodsDescription: agreement?.goods_description || "100 machined metal components",
     buyerApproved: agreement?.buyer_approved ?? true,
     supplierApproved: agreement?.supplier_approved ?? true,
-    findings: findings.length ? findings : undefined,
+    findings: findings.length > 0 ? findings : undefined,
   };
 }
 
