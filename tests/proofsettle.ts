@@ -28,7 +28,7 @@ describe("proofsettle", () => {
     idx.writeUInt16LE(index);
     return PublicKey.findProgramAddressSync(
       [Buffer.from("evidence"), shipment.toBuffer(), idx],
-      program.programId
+      program.programId,
     )[0];
   };
 
@@ -53,16 +53,24 @@ describe("proofsettle", () => {
     buyer: Keypair;
     supplier: Keypair;
     authority: Keypair;
+    reviewer: Keypair;
     shipment: PublicKey;
     termsHash: number[];
   }
 
+  interface Rule {
+    toleranceUnits?: number;
+    minDispatch?: number;
+    minReceipt?: number;
+  }
+
   /** Creates a shipment in Draft. */
-  async function createDeal(): Promise<Deal> {
+  async function createDeal(rule: Rule = {}): Promise<Deal> {
     const buyer = Keypair.generate();
     const supplier = Keypair.generate();
     const authority = Keypair.generate();
-    await fund(buyer, supplier, authority);
+    const reviewer = Keypair.generate();
+    await fund(buyer, supplier, authority, reviewer);
 
     const shipmentId = randomBytes(16);
     const shipment = shipmentPda(shipmentId);
@@ -72,28 +80,32 @@ describe("proofsettle", () => {
       .createShipment(Array.from(shipmentId), {
         supplier: supplier.publicKey,
         authority: authority.publicKey,
+        reviewer: reviewer.publicKey,
         termsHash,
         invoiceAmountCents: cents(10_000),
         quantity: 100,
         creditPerDefectCents: cents(100),
         maxAdjustmentCents: cents(5_000),
+        defectToleranceUnits: rule.toleranceUnits ?? 0,
+        minDispatchEvidence: rule.minDispatch ?? 1,
+        minReceiptEvidence: rule.minReceipt ?? 1,
       })
       .accountsPartial({ shipment, buyer: buyer.publicKey })
       .signers([buyer])
       .rpc();
 
-    return { buyer, supplier, authority, shipment, termsHash };
+    return { buyer, supplier, authority, reviewer, shipment, termsHash };
   }
 
   const approve = (d: Deal, who: Keypair, hash: number[] = d.termsHash) =>
     program.methods
       .approveAgreement(hash)
-      .accountsPartial({ shipment: d.shipment, approver: who.publicKey })
+      .accountsPartial({ shipment: d.shipment, party: who.publicKey })
       .signers([who])
       .rpc();
 
-  async function newAgreedDeal(): Promise<Deal> {
-    const d = await createDeal();
+  async function newAgreedDeal(rule: Rule = {}): Promise<Deal> {
+    const d = await createDeal(rule);
     await approve(d, d.buyer);
     await approve(d, d.supplier);
     return d;
@@ -102,8 +114,8 @@ describe("proofsettle", () => {
   async function recordEvidence(
     d: Deal,
     who: Keypair,
-    kind: { dispatch: {} } | { receipt: {} },
-    bytes: Buffer
+    kind: { dispatch: Record<string, never> } | { receipt: Record<string, never> },
+    bytes: Buffer,
   ) {
     const s = await program.account.shipment.fetch(d.shipment);
     const evidence = evidencePda(d.shipment, s.evidenceCount);
@@ -115,92 +127,132 @@ describe("proofsettle", () => {
     return evidence;
   }
 
-  /** Agreed -> dispatch photo -> InTransit -> receipt photo -> Inspection. */
-  async function dealInInspection(): Promise<Deal> {
-    const d = await newAgreedDeal();
-    await recordEvidence(d, d.supplier, { dispatch: {} }, Buffer.from("dispatch-photo-1"));
-    await program.methods
+  const markInTransit = (d: Deal, who: Keypair = d.supplier) =>
+    program.methods
       .markInTransit()
-      .accountsPartial({ shipment: d.shipment, supplier: d.supplier.publicKey })
-      .signers([d.supplier])
+      .accountsPartial({ shipment: d.shipment, supplier: who.publicKey })
+      .signers([who])
       .rpc();
+
+  /** Agreed -> dispatch photo -> InTransit -> receipt photo -> Inspection. */
+  async function dealInInspection(rule: Rule = {}): Promise<Deal> {
+    const d = await newAgreedDeal(rule);
+    await recordEvidence(d, d.supplier, { dispatch: {} }, Buffer.from("dispatch-photo-1"));
+    await markInTransit(d);
     await recordEvidence(d, d.buyer, { receipt: {} }, Buffer.from("receipt-photo-1"));
     return d;
   }
 
   const propose = (d: Deal, defects: number, who: Keypair = d.authority) =>
     program.methods
-      .proposeAdjustment(defects, sha256("findings-json"), sha256("explanation-text"))
+      .proposeAdjustment(defects, sha256("findings-json"), sha256("adjustment-json"))
       .accountsPartial({ shipment: d.shipment, authority: who.publicKey })
       .signers([who])
       .rpc();
 
+  const accept = (d: Deal, who: Keypair) =>
+    program.methods
+      .acceptAdjustment()
+      .accountsPartial({ shipment: d.shipment, party: who.publicKey })
+      .signers([who])
+      .rpc();
+
+  const dispute = (d: Deal, who: Keypair, reason = "damage happened in transit") =>
+    program.methods
+      .disputeAdjustment(sha256(reason))
+      .accountsPartial({ shipment: d.shipment, party: who.publicKey })
+      .signers([who])
+      .rpc();
+
+  const resolve = (d: Deal, defects: number, who: Keypair = d.reviewer) =>
+    program.methods
+      .resolveDispute(defects, sha256("resolved-adjustment-json"))
+      .accountsPartial({ shipment: d.shipment, reviewer: who.publicKey })
+      .signers([who])
+      .rpc();
+
+  const fetch = (d: Deal) => program.account.shipment.fetch(d.shipment);
+
   // ---- demo cases --------------------------------------------------------
 
-  it("Case A: 3 defects x $100 -> $300 proposal, supplier accepts", async () => {
+  it("Case A: 3 defects x $100 -> $300 proposal, accepted only once both parties accept", async () => {
     const d = await dealInInspection();
 
     await propose(d, 3);
-    let s = await program.account.shipment.fetch(d.shipment);
+    let s = await fetch(d);
     assert.deepEqual(s.status, { proposed: {} });
     assert.equal(s.confirmedDefects, 3);
     assert.equal(s.proposedAdjustmentCents.toNumber(), 30_000);
 
-    await program.methods
-      .acceptAdjustment()
-      .accountsPartial({ shipment: d.shipment, supplier: d.supplier.publicKey })
-      .signers([d.supplier])
-      .rpc();
+    await accept(d, d.supplier);
+    s = await fetch(d);
+    assert.deepEqual(s.status, { proposed: {} }, "one acceptance is not enough");
+    assert.isTrue(s.supplierAccepted);
+    assert.isFalse(s.buyerAccepted);
 
-    s = await program.account.shipment.fetch(d.shipment);
+    await accept(d, d.buyer);
+    s = await fetch(d);
     assert.deepEqual(s.status, { accepted: {} });
     assert.equal(s.finalAdjustmentCents.toNumber(), 30_000);
-    // created, 2 approvals, dispatch evidence, in transit, receipt evidence, proposed, accepted
-    assert.equal(s.auditSeq.toNumber(), 8);
+    // created, 2 approvals, dispatch evidence, in transit, receipt evidence, proposed, 2 accepts
+    assert.equal(s.auditSeq.toNumber(), 9);
   });
 
-  it("Case B: supplier disputes, only the authority can resolve", async () => {
+  it("Case B: the buyer disputes, only the reviewer resolves, and the amount comes from the rule", async () => {
     const d = await dealInInspection();
     await propose(d, 3);
+    await dispute(d, d.buyer);
 
-    await program.methods
-      .disputeAdjustment(sha256("supplier says damage happened in transit"))
-      .accountsPartial({ shipment: d.shipment, supplier: d.supplier.publicKey })
-      .signers([d.supplier])
-      .rpc();
-
-    let s = await program.account.shipment.fetch(d.shipment);
+    let s = await fetch(d);
     assert.deepEqual(s.status, { disputed: {} });
 
-    // The supplier cannot resolve their own dispute.
-    await expectFail(
-      program.methods
-        .resolveDispute(cents(0), sha256("supplier self-resolution"))
-        .accountsPartial({ shipment: d.shipment, authority: d.supplier.publicKey })
-        .signers([d.supplier])
-        .rpc(),
-      "Unauthorized"
-    );
+    // Neither party, nor the rules engine, can resolve.
+    await expectFail(resolve(d, 0, d.supplier), "Unauthorized");
+    await expectFail(resolve(d, 0, d.buyer), "Unauthorized");
+    await expectFail(resolve(d, 0, d.authority), "Unauthorized");
 
-    await program.methods
-      .resolveDispute(cents(200), sha256("reviewer decision"))
-      .accountsPartial({ shipment: d.shipment, authority: d.authority.publicKey })
-      .signers([d.authority])
-      .rpc();
-
-    s = await program.account.shipment.fetch(d.shipment);
+    // The reviewer confirms 2 of the 3 findings: 2 x $100.
+    await resolve(d, 2);
+    s = await fetch(d);
     assert.deepEqual(s.status, { resolved: {} });
+    assert.equal(s.confirmedDefects, 2);
     assert.equal(s.finalAdjustmentCents.toNumber(), 20_000);
     assert.equal(s.auditSeq.toNumber(), 9);
   });
 
+  it("the supplier can dispute too", async () => {
+    const d = await dealInInspection();
+    await propose(d, 3);
+    await dispute(d, d.supplier);
+    assert.deepEqual((await fetch(d)).status, { disputed: {} });
+  });
+
   // ---- rules and guards --------------------------------------------------
+
+  it("subtracts the defect tolerance before applying the credit", async () => {
+    const d = await dealInInspection({ toleranceUnits: 1 });
+    await propose(d, 3); // (3 - 1) x $100
+    assert.equal((await fetch(d)).proposedAdjustmentCents.toNumber(), 20_000);
+  });
+
+  it("proposes nothing when the defects are within tolerance", async () => {
+    const d = await dealInInspection({ toleranceUnits: 5 });
+    await propose(d, 3);
+    assert.equal((await fetch(d)).proposedAdjustmentCents.toNumber(), 0);
+  });
+
+  it("applies the same rule, tolerance included, when resolving", async () => {
+    const d = await dealInInspection({ toleranceUnits: 1 });
+    await propose(d, 3);
+    await dispute(d, d.supplier);
+    await resolve(d, 2); // (2 - 1) x $100
+    assert.equal((await fetch(d)).finalAdjustmentCents.toNumber(), 10_000);
+  });
 
   it("caps the proposal at the agreed maximum", async () => {
     const d = await dealInInspection();
     await propose(d, 60); // 60 x $100 = $6,000 > $5,000 cap
-    const s = await program.account.shipment.fetch(d.shipment);
-    assert.equal(s.proposedAdjustmentCents.toNumber(), 500_000);
+    assert.equal((await fetch(d)).proposedAdjustmentCents.toNumber(), 500_000);
   });
 
   it("rejects more defects than the shipment quantity", async () => {
@@ -211,6 +263,81 @@ describe("proofsettle", () => {
   it("only the authority can propose an adjustment", async () => {
     const d = await dealInInspection();
     await expectFail(propose(d, 3, d.supplier), "Unauthorized");
+    await expectFail(propose(d, 3, d.reviewer), "Unauthorized");
+  });
+
+  it("a party can accept only once, and can't dispute after accepting", async () => {
+    const d = await dealInInspection();
+    await propose(d, 3);
+    await accept(d, d.buyer);
+    await expectFail(accept(d, d.buyer), "AlreadyAccepted");
+    await expectFail(dispute(d, d.buyer), "AlreadyAccepted");
+    // The other party can still dispute.
+    await dispute(d, d.supplier);
+    assert.deepEqual((await fetch(d)).status, { disputed: {} });
+  });
+
+  it("only the buyer or supplier can accept or dispute", async () => {
+    const d = await dealInInspection();
+    await propose(d, 3);
+    await expectFail(accept(d, d.authority), "Unauthorized");
+    await expectFail(dispute(d, d.reviewer), "Unauthorized");
+  });
+
+  it("needs the agreed number of dispatch photos before going in transit", async () => {
+    const d = await newAgreedDeal({ minDispatch: 2 });
+    await recordEvidence(d, d.supplier, { dispatch: {} }, Buffer.from("dispatch-1"));
+    await expectFail(markInTransit(d), "MissingDispatchEvidence");
+    await recordEvidence(d, d.supplier, { dispatch: {} }, Buffer.from("dispatch-2"));
+    await markInTransit(d);
+    assert.deepEqual((await fetch(d)).status, { inTransit: {} });
+  });
+
+  it("moves to Inspection only once the agreed number of receipt photos is recorded", async () => {
+    const d = await newAgreedDeal({ minReceipt: 2 });
+    await recordEvidence(d, d.supplier, { dispatch: {} }, Buffer.from("dispatch-1"));
+    await markInTransit(d);
+    await recordEvidence(d, d.buyer, { receipt: {} }, Buffer.from("receipt-1"));
+    assert.deepEqual((await fetch(d)).status, { inTransit: {} });
+    await recordEvidence(d, d.buyer, { receipt: {} }, Buffer.from("receipt-2"));
+    assert.deepEqual((await fetch(d)).status, { inspection: {} });
+    // A further receipt photo from the same upload is still accepted in Inspection.
+    await recordEvidence(d, d.buyer, { receipt: {} }, Buffer.from("receipt-3"));
+    assert.equal((await fetch(d)).receiptEvidenceCount, 3);
+  });
+
+  it("only the supplier can mark the shipment in transit", async () => {
+    const d = await newAgreedDeal();
+    await recordEvidence(d, d.supplier, { dispatch: {} }, Buffer.from("dispatch-1"));
+    await expectFail(markInTransit(d, d.buyer), "Unauthorized");
+  });
+
+  it("requires four distinct keys", async () => {
+    const buyer = Keypair.generate();
+    const supplier = Keypair.generate();
+    const authority = Keypair.generate();
+    await fund(buyer);
+    const shipmentId = randomBytes(16);
+    await expectFail(
+      program.methods
+        .createShipment(Array.from(shipmentId), {
+          supplier: supplier.publicKey,
+          authority: authority.publicKey,
+          reviewer: authority.publicKey, // same key as the authority
+          termsHash: sha256("terms"),
+          invoiceAmountCents: cents(10_000),
+          quantity: 100,
+          creditPerDefectCents: cents(100),
+          maxAdjustmentCents: cents(5_000),
+          defectToleranceUnits: 0,
+          minDispatchEvidence: 1,
+          minReceiptEvidence: 1,
+        })
+        .accountsPartial({ shipment: shipmentPda(shipmentId), buyer: buyer.publicKey })
+        .signers([buyer])
+        .rpc(),
+      "InvalidParties",
+    );
   });
 
   it("rejects approval of terms that do not match the registered hash", async () => {
@@ -229,7 +356,7 @@ describe("proofsettle", () => {
     const d = await newAgreedDeal();
     await expectFail(
       recordEvidence(d, d.buyer, { dispatch: {} }, Buffer.from("fake dispatch")),
-      "Unauthorized"
+      "Unauthorized",
     );
   });
 

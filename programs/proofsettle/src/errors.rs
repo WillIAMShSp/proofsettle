@@ -6,7 +6,7 @@ pub enum ProofSettleError {
     Unauthorized,
     #[msg("Shipment is not in the status required for this action")]
     InvalidStatus,
-    #[msg("Buyer, supplier and authority must be three distinct keys")]
+    #[msg("Buyer, supplier, authority and reviewer must be four distinct keys")]
     InvalidParties,
     #[msg("Amount parameters are invalid")]
     InvalidAmount,
@@ -20,12 +20,18 @@ pub enum ProofSettleError {
     AlreadyApproved,
     #[msg("Evidence limit reached for this shipment")]
     EvidenceLimitReached,
-    #[msg("At least one dispatch evidence record is required")]
+    #[msg("Not enough dispatch evidence recorded yet")]
     MissingDispatchEvidence,
-    #[msg("At least one receipt evidence record is required")]
+    #[msg("Not enough receipt evidence recorded yet")]
     MissingReceiptEvidence,
     #[msg("Confirmed defects exceed the shipment quantity")]
     DefectsExceedQuantity,
     #[msg("Arithmetic overflow")]
     MathOverflow,
+    #[msg("This party has already accepted the adjustment")]
+    AlreadyAccepted,
+    #[msg("Defect tolerance cannot exceed the shipment quantity")]
+    InvalidTolerance,
+    #[msg("Evidence minimums must be at least 1 and fit within the evidence limit")]
+    InvalidEvidenceRequirements,
 }

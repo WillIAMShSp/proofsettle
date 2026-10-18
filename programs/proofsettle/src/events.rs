@@ -12,6 +12,7 @@ pub struct ShipmentCreated {
     pub buyer: Pubkey,
     pub supplier: Pubkey,
     pub authority: Pubkey,
+    pub reviewer: Pubkey,
     pub terms_hash: [u8; 32],
     pub invoice_amount_cents: u64,
     pub seq: u64,
@@ -62,7 +63,11 @@ pub struct AdjustmentProposed {
 #[event]
 pub struct AdjustmentAccepted {
     pub shipment: Pubkey,
-    pub final_adjustment_cents: u64,
+    pub accepter: Pubkey,
+    /// True once both buyer and supplier have accepted (status becomes Accepted).
+    pub fully_accepted: bool,
+    /// The proposed amount; it becomes final when `fully_accepted`.
+    pub adjustment_cents: u64,
     pub seq: u64,
     pub timestamp: i64,
 }
@@ -70,6 +75,7 @@ pub struct AdjustmentAccepted {
 #[event]
 pub struct AdjustmentDisputed {
     pub shipment: Pubkey,
+    pub disputer: Pubkey,
     pub reason_hash: [u8; 32],
     pub seq: u64,
     pub timestamp: i64,
@@ -78,6 +84,7 @@ pub struct AdjustmentDisputed {
 #[event]
 pub struct DisputeResolved {
     pub shipment: Pubkey,
+    pub confirmed_defects: u32,
     pub final_adjustment_cents: u64,
     pub resolution_hash: [u8; 32],
     pub seq: u64,

@@ -1,0 +1,1588 @@
+{
+  "address": "FNp1BRdeBxrEqrW2Uyx2VicGtJqpMDGj2XUorkApuabm",
+  "metadata": {
+    "name": "proofsettle",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "ProofSettle: on-chain agreement, evidence and settlement record"
+  },
+  "instructions": [
+    {
+      "name": "accept_adjustment",
+      "docs": [
+        "Buyer or supplier accepts the proposal. It becomes `Accepted` only once both have."
+      ],
+      "discriminator": [
+        13,
+        224,
+        98,
+        47,
+        168,
+        134,
+        195,
+        128
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "party",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "approve_agreement",
+      "docs": [
+        "Buyer and supplier each call this with the terms hash they reviewed.",
+        "Once both have approved, the shipment moves to `Agreed`."
+      ],
+      "discriminator": [
+        155,
+        95,
+        200,
+        13,
+        36,
+        229,
+        121,
+        96
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "party",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "terms_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_shipment",
+      "docs": [
+        "Buyer opens a shipment in `Draft` and registers the agreement.",
+        "",
+        "`params.terms_hash` must be the sha256 of the canonical terms JSON stored off-chain.",
+        "The numeric parameters must match that JSON; each party checks this off-chain",
+        "before approving."
+      ],
+      "discriminator": [
+        67,
+        64,
+        17,
+        114,
+        30,
+        143,
+        249,
+        247
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "shipment_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "shipment_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "AgreementParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "dispute_adjustment",
+      "docs": [
+        "Buyer or supplier disputes the proposal. A party that has already accepted can't.",
+        "`reason_hash` commits to the written reason stored off-chain."
+      ],
+      "discriminator": [
+        199,
+        8,
+        229,
+        56,
+        30,
+        252,
+        241,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "party",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "reason_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "mark_in_transit",
+      "docs": [
+        "Supplier confirms the goods are dispatched. Requires the agreed minimum of",
+        "dispatch photo hashes."
+      ],
+      "discriminator": [
+        208,
+        164,
+        6,
+        15,
+        221,
+        55,
+        217,
+        108
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "supplier",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "propose_adjustment",
+      "docs": [
+        "Authority (rules engine) submits the inspection result.",
+        "",
+        "The amount is NOT a parameter. It is computed from the approved rule:",
+        "proposed = min(max(0, confirmed_defects - tolerance) * credit_per_defect, max_adjustment)",
+        "This is the on-chain version of \"AI must not independently decide the payment amount\"."
+      ],
+      "discriminator": [
+        90,
+        186,
+        188,
+        58,
+        49,
+        89,
+        216,
+        219
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "confirmed_defects",
+          "type": "u32"
+        },
+        {
+          "name": "findings_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "explanation_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "record_evidence",
+      "docs": [
+        "Records the SHA-256 of one evidence file.",
+        "Dispatch: supplier only, while `Agreed`.",
+        "Receipt:  buyer only, while `InTransit` or `Inspection`. Reaching the agreed",
+        "minimum while `InTransit` moves the shipment to `Inspection`."
+      ],
+      "discriminator": [
+        253,
+        55,
+        82,
+        184,
+        77,
+        64,
+        217,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "evidence",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  118,
+                  105,
+                  100,
+                  101,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment"
+              },
+              {
+                "kind": "account",
+                "path": "shipment.evidence_count",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "uploader",
+          "docs": [
+            "Supplier (dispatch) or buyer (receipt); checked in the handler."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "kind",
+          "type": {
+            "defined": {
+              "name": "EvidenceKind"
+            }
+          }
+        },
+        {
+          "name": "sha256",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "resolve_dispute",
+      "docs": [
+        "Reviewer closes a dispute with the reviewed defect count. The final amount is the",
+        "agreed rule applied to that count, exactly as for a proposal; it is never typed in."
+      ],
+      "discriminator": [
+        231,
+        6,
+        202,
+        6,
+        96,
+        103,
+        12,
+        230
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reviewer",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "confirmed_defects",
+          "type": "u32"
+        },
+        {
+          "name": "resolution_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify_evidence",
+      "docs": [
+        "Anyone can check a file hash against the on-chain record (FR-09).",
+        "Emits `EvidenceVerified { matches }`; changes no state."
+      ],
+      "discriminator": [
+        41,
+        242,
+        99,
+        213,
+        185,
+        46,
+        83,
+        227
+      ],
+      "accounts": [
+        {
+          "name": "shipment",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "shipment.shipment_id",
+                "account": "Shipment"
+              }
+            ]
+          },
+          "relations": [
+            "evidence"
+          ]
+        },
+        {
+          "name": "evidence"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_sha256",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Evidence",
+      "discriminator": [
+        160,
+        73,
+        93,
+        206,
+        99,
+        242,
+        62,
+        92
+      ]
+    },
+    {
+      "name": "Shipment",
+      "discriminator": [
+        3,
+        65,
+        195,
+        72,
+        154,
+        63,
+        211,
+        213
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AdjustmentAccepted",
+      "discriminator": [
+        96,
+        155,
+        252,
+        39,
+        244,
+        248,
+        154,
+        70
+      ]
+    },
+    {
+      "name": "AdjustmentDisputed",
+      "discriminator": [
+        158,
+        145,
+        88,
+        20,
+        124,
+        140,
+        128,
+        133
+      ]
+    },
+    {
+      "name": "AdjustmentProposed",
+      "discriminator": [
+        179,
+        246,
+        172,
+        117,
+        138,
+        151,
+        81,
+        38
+      ]
+    },
+    {
+      "name": "AgreementApproved",
+      "discriminator": [
+        83,
+        140,
+        133,
+        2,
+        219,
+        45,
+        58,
+        174
+      ]
+    },
+    {
+      "name": "DisputeResolved",
+      "discriminator": [
+        121,
+        64,
+        249,
+        153,
+        139,
+        128,
+        236,
+        187
+      ]
+    },
+    {
+      "name": "EvidenceRecorded",
+      "discriminator": [
+        66,
+        200,
+        101,
+        138,
+        117,
+        63,
+        129,
+        175
+      ]
+    },
+    {
+      "name": "EvidenceVerified",
+      "discriminator": [
+        93,
+        104,
+        48,
+        167,
+        124,
+        181,
+        45,
+        71
+      ]
+    },
+    {
+      "name": "ShipmentCreated",
+      "discriminator": [
+        208,
+        238,
+        202,
+        187,
+        110,
+        165,
+        208,
+        89
+      ]
+    },
+    {
+      "name": "ShipmentDispatched",
+      "discriminator": [
+        255,
+        101,
+        194,
+        157,
+        72,
+        28,
+        78,
+        180
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Signer is not authorized to perform this action"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidStatus",
+      "msg": "Shipment is not in the status required for this action"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidParties",
+      "msg": "Buyer, supplier, authority and reviewer must be four distinct keys"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidAmount",
+      "msg": "Amount parameters are invalid"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidQuantity",
+      "msg": "Quantity must be greater than zero"
+    },
+    {
+      "code": 6005,
+      "name": "ZeroHash",
+      "msg": "A hash value must not be all zeros"
+    },
+    {
+      "code": 6006,
+      "name": "TermsHashMismatch",
+      "msg": "Terms hash does not match the registered agreement"
+    },
+    {
+      "code": 6007,
+      "name": "AlreadyApproved",
+      "msg": "This party has already approved the agreement"
+    },
+    {
+      "code": 6008,
+      "name": "EvidenceLimitReached",
+      "msg": "Evidence limit reached for this shipment"
+    },
+    {
+      "code": 6009,
+      "name": "MissingDispatchEvidence",
+      "msg": "Not enough dispatch evidence recorded yet"
+    },
+    {
+      "code": 6010,
+      "name": "MissingReceiptEvidence",
+      "msg": "Not enough receipt evidence recorded yet"
+    },
+    {
+      "code": 6011,
+      "name": "DefectsExceedQuantity",
+      "msg": "Confirmed defects exceed the shipment quantity"
+    },
+    {
+      "code": 6012,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6013,
+      "name": "AlreadyAccepted",
+      "msg": "This party has already accepted the adjustment"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidTolerance",
+      "msg": "Defect tolerance cannot exceed the shipment quantity"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidEvidenceRequirements",
+      "msg": "Evidence minimums must be at least 1 and fit within the evidence limit"
+    }
+  ],
+  "types": [
+    {
+      "name": "AdjustmentAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "accepter",
+            "type": "pubkey"
+          },
+          {
+            "name": "fully_accepted",
+            "docs": [
+              "True once both buyer and supplier have accepted (status becomes Accepted)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "adjustment_cents",
+            "docs": [
+              "The proposed amount; it becomes final when `fully_accepted`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdjustmentDisputed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "disputer",
+            "type": "pubkey"
+          },
+          {
+            "name": "reason_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdjustmentProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "confirmed_defects",
+            "type": "u32"
+          },
+          {
+            "name": "proposed_adjustment_cents",
+            "type": "u64"
+          },
+          {
+            "name": "findings_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "explanation_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AgreementApproved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "approver",
+            "type": "pubkey"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "fully_approved",
+            "docs": [
+              "True once both buyer and supplier have approved (status becomes Agreed)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AgreementParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "supplier",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewer",
+            "type": "pubkey"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "invoice_amount_cents",
+            "type": "u64"
+          },
+          {
+            "name": "quantity",
+            "type": "u32"
+          },
+          {
+            "name": "credit_per_defect_cents",
+            "type": "u64"
+          },
+          {
+            "name": "max_adjustment_cents",
+            "type": "u64"
+          },
+          {
+            "name": "defect_tolerance_units",
+            "type": "u32"
+          },
+          {
+            "name": "min_dispatch_evidence",
+            "type": "u16"
+          },
+          {
+            "name": "min_receipt_evidence",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DisputeResolved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "confirmed_defects",
+            "type": "u32"
+          },
+          {
+            "name": "final_adjustment_cents",
+            "type": "u64"
+          },
+          {
+            "name": "resolution_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Evidence",
+      "docs": [
+        "One account per evidence file. Only the SHA-256 lives on-chain; the file stays",
+        "in the backend's evidence storage.",
+        "",
+        "PDA: [\"evidence\", shipment, index_le_u16]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "EvidenceKind"
+              }
+            }
+          },
+          {
+            "name": "sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "uploader",
+            "type": "pubkey"
+          },
+          {
+            "name": "recorded_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EvidenceKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Dispatch"
+          },
+          {
+            "name": "Receipt"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EvidenceRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "evidence",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "EvidenceKind"
+              }
+            }
+          },
+          {
+            "name": "sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "uploader",
+            "type": "pubkey"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EvidenceVerified",
+      "docs": [
+        "Read-only result of `verify_evidence`. Not an audit event (no `seq`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "evidence",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "name": "matches",
+            "type": "bool"
+          },
+          {
+            "name": "expected_sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recorded_sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Shipment",
+      "docs": [
+        "One account per shipment. Holds the agreement, the workflow state and the",
+        "commitments (hashes) to everything that lives off-chain.",
+        "",
+        "PDA: [\"shipment\", shipment_id]  where shipment_id is the backend's 16-byte",
+        "`chain_uuid` for the shipment (uuid5 of its id, e.g. \"PS-1042\")."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment_id",
+            "docs": [
+              "UUID bytes of the off-chain shipment (backend `shipments.chain_uuid`)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "supplier",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "ProofSettle backend (rules engine). Only signer of `propose_adjustment`.",
+              "Cannot move funds (there are none)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewer",
+            "docs": [
+              "Human reviewer. Only signer of `resolve_dispute`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "invoice_amount_cents",
+            "type": "u64"
+          },
+          {
+            "name": "quantity",
+            "type": "u32"
+          },
+          {
+            "name": "credit_per_defect_cents",
+            "docs": [
+              "Deterministic rule, the same as the backend's settlement engine:",
+              "adjustment = min(max(0, defects - defect_tolerance_units) * credit_per_defect,",
+              "max_adjustment)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_adjustment_cents",
+            "type": "u64"
+          },
+          {
+            "name": "defect_tolerance_units",
+            "type": "u32"
+          },
+          {
+            "name": "min_dispatch_evidence",
+            "docs": [
+              "Photos needed before the shipment can move on (Agreed -> InTransit,",
+              "InTransit -> Inspection)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "min_receipt_evidence",
+            "type": "u16"
+          },
+          {
+            "name": "buyer_approved",
+            "type": "bool"
+          },
+          {
+            "name": "supplier_approved",
+            "type": "bool"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "ShipmentStatus"
+              }
+            }
+          },
+          {
+            "name": "evidence_count",
+            "type": "u16"
+          },
+          {
+            "name": "dispatch_evidence_count",
+            "type": "u16"
+          },
+          {
+            "name": "receipt_evidence_count",
+            "type": "u16"
+          },
+          {
+            "name": "confirmed_defects",
+            "docs": [
+              "Confirmed defective units behind the current amount: the proposal's count,",
+              "replaced by the reviewed count when a dispute is resolved."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "findings_hash",
+            "docs": [
+              "sha256 of the inspection findings JSON."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "explanation_hash",
+            "docs": [
+              "sha256 of the settlement engine's full adjustment JSON, shown to both parties."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "proposed_adjustment_cents",
+            "type": "u64"
+          },
+          {
+            "name": "buyer_accepted",
+            "docs": [
+              "Both parties must accept the proposal before it becomes `Accepted`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "supplier_accepted",
+            "type": "bool"
+          },
+          {
+            "name": "dispute_reason_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "resolution_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "final_adjustment_cents",
+            "type": "u64"
+          },
+          {
+            "name": "audit_seq",
+            "docs": [
+              "Monotonic counter; every state-changing instruction bumps it by exactly one",
+              "and emits an event carrying it, so the backend can detect missing events and",
+              "tell how far its history has been mirrored on-chain."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShipmentCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "shipment_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "supplier",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewer",
+            "type": "pubkey"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "invoice_amount_cents",
+            "type": "u64"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShipmentDispatched",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShipmentStatus",
+      "docs": [
+        "Workflow from the PRD:",
+        "Draft -> Agreed -> InTransit -> Inspection -> Proposed -> Accepted",
+        "Proposed -> Disputed -> Resolved"
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Draft"
+          },
+          {
+            "name": "Agreed"
+          },
+          {
+            "name": "InTransit"
+          },
+          {
+            "name": "Inspection"
+          },
+          {
+            "name": "Proposed"
+          },
+          {
+            "name": "Accepted"
+          },
+          {
+            "name": "Disputed"
+          },
+          {
+            "name": "Resolved"
+          }
+        ]
+      }
+    }
+  ]
+}

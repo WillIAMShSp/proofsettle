@@ -7,16 +7,21 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-proofsettle = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+proofsettle = "FNp1BRdeBxrEqrW2Uyx2VicGtJqpMDGj2XUorkApuabm"
+
+[programs.devnet]
+proofsettle = "FNp1BRdeBxrEqrW2Uyx2VicGtJqpMDGj2XUorkApuabm"
 
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
-[hooks]
-post-build = "node scripts/sync-idl.mjs"
-
 # The program tests keep their own package.json in tests/ so the web app's
-# package.json and bun.lock (synced with Lovable) stay untouched.
+# package.json and lockfiles (synced with Lovable) stay untouched. Run from the
+# workspace root: anchor.workspace reads ./Anchor.toml.
 [scripts]
-test = "cd tests && npx ts-mocha -p ./tsconfig.json -t 1000000 proofsettle.ts"
+test = "tests/node_modules/.bin/ts-mocha -p tests/tsconfig.json -t 1000000 tests/proofsettle.ts"
+
+# Hooks and scripts run through `bash -c`; on Windows put Git's bash first on PATH.
+[hooks]
+post_build = "node scripts/sync-idl.mjs"

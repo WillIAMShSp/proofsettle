@@ -2,7 +2,8 @@
 name = "proofsettle"
 version = "0.1.0"
 description = "ProofSettle: on-chain agreement, evidence and settlement record"
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -15,7 +16,13 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
 
 [dependencies]
-# Keep this in sync with your installed anchor-cli (`avm install 1.2.1 && avm use 1.2.1`)
+# Keep this in sync with the anchor-cli that builds it (anchor --version).
 anchor-lang = "1.2.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
