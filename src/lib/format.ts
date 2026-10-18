@@ -15,6 +15,10 @@ export function formatAt(iso: string): string {
   });
 }
 
+/** A Solana Explorer page for a transaction signature or an account address. */
+export const explorerUrl = (kind: "tx" | "address", id: string, cluster: string) =>
+  `https://explorer.solana.com/${kind}/${id}?cluster=${cluster}`;
+
 /** First 8 and last 6 characters of a hash. */
 export const short = (x: string) => `${x.slice(0, 8)}…${x.slice(-6)}`;
 

@@ -1,9 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
-import { Check, AlertTriangle, ShieldCheck, Scale } from "lucide-react";
+import { Check, AlertTriangle, ExternalLink, ShieldCheck, Scale } from "lucide-react";
 import { Chip, ErrorNote, Notice, PickRole, TopBar, useStore } from "@/lib/store";
 import {
   ApiError,
+  type AuditEvent,
+  type ChainInfo,
   type EvidenceKind,
   type Finding,
   type FindingOutcome,
@@ -11,7 +13,7 @@ import {
   type Status,
 } from "@/lib/api";
 import { api, useShipment, useShipmentWrite, useVerifyAudit } from "@/lib/queries";
-import { formatAt, short, unitShort, usd } from "@/lib/format";
+import { explorerUrl, formatAt, short, unitShort, usd } from "@/lib/format";
 
 export const Route = createFileRoute("/shipments/$id")({
   head: ({ params }) => ({
@@ -709,7 +711,9 @@ function AuditSection({ s }: { s: ShipmentDetail }) {
         ? "Verify hashes"
         : v.verified
           ? `${v.checked} hashes verified`
-          : `${failed} of ${v.checked} hashes failed`;
+          : failed
+            ? `${failed} of ${v.checked} hashes failed`
+            : "On-chain record differs";
   const tone =
     verify.isError || (v && !v.verified)
       ? "border-destructive/50 text-destructive"
@@ -746,12 +750,14 @@ function AuditSection({ s }: { s: ShipmentDetail }) {
                   {short(e.hash)}
                 </span>
                 {ok === false && <span className="text-destructive"> · hash or link mismatch</span>}
+                {s.chain && <ChainMark event={e} chain={s.chain} />}
               </p>
             </li>
           );
         })}
         {!s.events.length && <p className="text-sm text-muted-foreground">No events yet.</p>}
       </ol>
+      {s.chain && <ChainFooter s={s} chain={s.chain} />}
       {v && (
         <ul className="mt-8 grid gap-2 border-t pt-6 text-sm md:grid-cols-2">
           <CheckLine ok={v.agreement?.ok ?? false}>
@@ -768,15 +774,80 @@ function AuditSection({ s }: { s: ShipmentDetail }) {
           <CheckLine ok={v.events.every((c) => c.ok)}>
             {v.events.filter((c) => c.ok).length} of {v.events.length} events match and link
           </CheckLine>
-          <li className="text-muted-foreground">
-            {v.chain.available
-              ? `${v.chain.anchored} events anchored on Solana`
-              : "Not anchored on-chain yet; checked against local hashes"}
-          </li>
+          {v.chain.available ? (
+            <CheckLine ok={v.chain.mismatches.length === 0}>
+              {v.chain.mismatches.length === 0
+                ? `${v.chain.anchored} anchored events match the Solana record`
+                : `Solana record differs: ${v.chain.mismatches.join("; ")}`}
+            </CheckLine>
+          ) : (
+            <li className="text-muted-foreground">
+              {s.chain
+                ? "Solana unreachable; checked against local hashes"
+                : "Not anchored on-chain; checked against local hashes"}
+            </li>
+          )}
         </ul>
       )}
       <ErrorNote error={verify.error} />
     </Section>
+  );
+}
+
+/** Where one event stands on Solana. Events with no on-chain counterpart show nothing. */
+function ChainMark({ event, chain }: { event: AuditEvent; chain: ChainInfo }) {
+  if (event.chainStatus === "confirmed" && event.txHash) {
+    return (
+      <>
+        {" · "}
+        <a
+          href={explorerUrl("tx", event.txHash, chain.explorerCluster)}
+          target="_blank"
+          rel="noreferrer"
+          title={event.txHash}
+          className="inline-flex items-center gap-1 text-primary hover:underline"
+        >
+          on Solana
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </>
+    );
+  }
+  if (event.chainStatus === "pending") return <span> · anchoring on Solana…</span>;
+  if (event.chainStatus === "failed")
+    return <span className="text-destructive"> · not anchored on Solana yet</span>;
+  return null;
+}
+
+function ChainFooter({ s, chain }: { s: ShipmentDetail; chain: ChainInfo }) {
+  const write = useShipmentWrite();
+  const failed = s.events.some((e) => e.chainStatus === "failed");
+  return (
+    <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+      <span>
+        Mirrored on Solana ({chain.explorerCluster.split("&")[0]}) ·{" "}
+        <a
+          href={explorerUrl("address", chain.address, chain.explorerCluster)}
+          target="_blank"
+          rel="noreferrer"
+          title={chain.address}
+          className="inline-flex items-center gap-1 font-mono text-primary hover:underline"
+        >
+          {short(chain.address)}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </span>
+      {failed && (
+        <button
+          disabled={write.isPending}
+          onClick={() => write.mutate(() => api.anchor(s.id))}
+          className="rounded-full border px-3 py-1 hover:border-primary/60 disabled:opacity-50"
+        >
+          {write.isPending ? "Retrying…" : "Retry anchoring"}
+        </button>
+      )}
+      <ErrorNote error={write.error} />
+    </div>
   );
 }
 

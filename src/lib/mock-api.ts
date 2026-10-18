@@ -28,7 +28,10 @@ import { usd } from "./format";
 import { MOCK_SEED } from "./mock-seed";
 
 /** What the mock stores per shipment: the adjustment's numbers are recomputed on read. */
-export type MockShipment = Omit<ShipmentDetail, "actions" | "inspection" | "adjustment"> & {
+export type MockShipment = Omit<
+  ShipmentDetail,
+  "actions" | "inspection" | "adjustment" | "chain"
+> & {
   findings: Finding[];
   adjustment: Pick<
     Adjustment,
@@ -190,6 +193,7 @@ function detail(s: MockShipment): ShipmentDetail {
     inspection: findings.length ? { findings } : null,
     adjustment,
     actions: actionsFor(s, getStoredRole(), adjustment),
+    chain: null, // the mock has no blockchain
   });
 }
 
@@ -510,6 +514,10 @@ export const mockApi: Api = {
         `Dispute resolved: ${usd(adj?.credit ?? 0)} credit`,
       );
     }),
+
+  anchor: async () => {
+    throw new ApiError(409, "Solana anchoring is not configured");
+  },
 
   verifyAudit: async (id) => {
     role();

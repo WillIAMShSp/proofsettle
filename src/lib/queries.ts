@@ -35,6 +35,9 @@ export function useShipment(id: string) {
     queryFn: () => api.getShipment(id),
     enabled: role !== null,
     retry: (count, error) => count < 2 && !(error instanceof ApiError && error.status === 404),
+    // The backend anchors on Solana after it answers; poll until nothing is pending.
+    refetchInterval: (q) =>
+      q.state.data?.events.some((e) => e.chainStatus === "pending") ? 2000 : false,
   });
 }
 

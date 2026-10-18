@@ -155,6 +155,15 @@ export type ShipmentSummary = {
   status: Status;
 };
 
+/** Where the shipment's record lives on Solana. Null when the backend has no chain configured. */
+export type ChainInfo = {
+  programId: string;
+  /** The shipment's program account (PDA). */
+  address: string;
+  /** Solana Explorer `cluster` query value, e.g. "devnet". */
+  explorerCluster: string;
+};
+
 export type ShipmentDetail = ShipmentSummary & {
   disputeReason: string | null;
   agreement: Agreement | null;
@@ -163,6 +172,7 @@ export type ShipmentDetail = ShipmentSummary & {
   adjustment: Adjustment | null;
   actions: Actions;
   events: AuditEvent[];
+  chain: ChainInfo | null;
 };
 
 export type EventCheck = {
@@ -222,6 +232,8 @@ export interface Api {
   dispute(id: string, reason: string): Promise<ShipmentDetail>;
   reviewFinding(findingId: string, decision: ReviewOverride): Promise<ShipmentDetail>;
   resolve(id: string): Promise<ShipmentDetail>;
+  /** Send whatever of the history isn't on Solana yet (retries failed anchoring). */
+  anchor(id: string): Promise<ShipmentDetail>;
   verifyAudit(id: string): Promise<Verification>;
   devReset(): Promise<ResetResult>;
 }
@@ -326,6 +338,7 @@ export const httpApi: Api = {
   reviewFinding: (findingId, decision) =>
     request("POST", `/findings/${enc(findingId)}/review`, { json: { decision } }),
   resolve: (id) => request("POST", `/shipments/${enc(id)}/resolve`),
+  anchor: (id) => request("POST", `/shipments/${enc(id)}/chain/anchor`),
   verifyAudit: (id) => request("POST", `/shipments/${enc(id)}/audit/verify`),
   devReset: () => request("POST", "/dev/reset"),
 };
