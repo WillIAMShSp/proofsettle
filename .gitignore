@@ -37,3 +37,6 @@ target
 test-ledger
 .surfpool
 **/*.rs.bk
+
+
+.env
