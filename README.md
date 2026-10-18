@@ -1,108 +1,177 @@
-# Welcome to your Lovable project
+# ProofSettle
 
-This project was built with [Lovable](https://lovable.dev).
+**Tamper-evident audit trails for real-world shipment inspections, anchored on Solana.**
 
-## Build with Lovable
+ProofSettle links physical inspection evidence (photos + metadata) to public, verifiable proofs on Solana. Full records stay off-chain for privacy and usability, while a cryptographic fingerprint of each record is anchored on-chain for immutability and independent verification.
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
+---
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+## The Problem
 
-## Development
+Physical shipment inspections and handoffs produce evidence (photos, notes, timestamps) that is easy to alter, lose, or dispute. Centralized logs can be modified after the fact and can't be independently verified by third parties, which makes disputes over condition, custody, and delivery hard to resolve.
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+## Our Solution
 
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+1. **Capture** an inspection (photo + metadata).
+2. **Hash** the payload with a cryptographic hash function.
+3. **Anchor** the hash in a lightweight Solana transaction.
+4. **Store** the transaction signature alongside the record in the database.
+5. **Verify** anytime: anyone can recompute the hash and compare it to the on-chain anchor via Solana Explorer.
+
+If a record is changed after anchoring, its hash no longer matches the on-chain proof, so tampering is detectable.
+
+## How It Works
+
+```
+┌──────────────┐    ┌──────────────┐    ┌─────────────────┐    ┌──────────────┐
+│  Web/Mobile  │───▶│   FastAPI    │───▶│ Solana Program  │───▶│   Solana     │
+│  (React/TS)  │    │   Backend    │    │     (Rust)      │    │  Blockchain  │
+└──────────────┘    └──────┬───────┘    └─────────────────┘    └──────┬───────┘
+                           │                                          │
+                           ▼                                          │
+                    ┌──────────────┐        tx signature              │
+                    │  PostgreSQL  │◀─────────────────────────────────┘
+                    │ (full record │
+                    │ + signature) │
+                    └──────────────┘
+```
+
+1. A user captures a photo and fills out the inspection form in the web/mobile frontend.
+2. The frontend uploads the data to the FastAPI backend.
+3. The backend hashes the payload. **Only the fingerprint is published; raw data never leaves the database.**
+4. The backend sends an instruction to the Solana program, which records or references the hash. Solana returns a transaction signature.
+5. The backend stores the record together with the signature and provides a verification link (Solana Explorer + local hash comparison).
+6. *(Optional)* Images can be run through an automated inspection/analysis pipeline using the Gemini API, before or after anchoring.
+
+## Key Features
+
+- **Privacy + immutability:** photos and notes stay off-chain; only hashes are public.
+- **Usability:** a familiar web flow and standard database search for everyday operations.
+- **Independent verifiability:** third parties can confirm a record's authenticity using the anchored transaction signature.
+- **Extensible:** supports automated inspection plugins (e.g., Gemini), multi-party workflows, and batching strategies.
+
+## Use Cases
+
+- High-value freight (electronics, luxury goods)
+- Cold-chain condition verification (pharma, food)
+- Customs and third-party inspections
+- Proof-of-delivery and chain-of-custody audits
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | TypeScript, React, Tailwind CSS |
+| Backend | Python, FastAPI |
+| On-chain program | Rust, Solana |
+| Database | PostgreSQL (with small PL/pgSQL components) |
+| AI analysis (optional) | Gemini API |
+
+## Getting Started
+
+> **Note:** Update the commands, directory names, and environment variables below to match the repo.
+
+### Prerequisites
+
+- Node.js 18+ and npm/yarn/pnpm
+- Python 3.10+
+- PostgreSQL
+- Rust and the [Solana CLI](https://docs.solana.com/cli/install-solana-cli-tools)
+- A funded Solana wallet on **devnet** (`solana airdrop 2`)
+- *(Optional)* A Gemini API key
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/WillIAMShSp/proofsettle.git
+cd proofsettle
+```
+
+### 2. Configure environment variables
+
+Create a `.env` file in the backend directory (and frontend, if needed):
+
+```bash
+# Database
+DATABASE_URL=postgresql://user:password@localhost:5432/proofsettle
+
+# Solana
+SOLANA_RPC_URL=https://api.devnet.solana.com
+SOLANA_PROGRAM_ID=<your_deployed_program_id>
+SOLANA_PRIVATE_KEY=<backend_signing_keypair>   # keep secret, never commit
+
+# Optional: automated inspection
+GEMINI_API_KEY=<your_gemini_api_key>
+```
+
+### 3. Deploy the Solana program
+
+```bash
+cd <program-directory>
+cargo build-sbf
+solana program deploy target/deploy/<program_name>.so --url devnet
+```
+
+Copy the resulting program ID into your `.env`.
+
+### 4. Run the backend
+
+```bash
+cd <backend-directory>
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+### 5. Run the frontend
+
+```bash
+cd <frontend-directory>
+npm install
 npm run dev
 ```
 
-## Built with
+The app should now be running locally.
 
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
+## Demo Walkthrough
 
-## Where data is stored (Supabase)
+1. **Create** a shipment record.
+2. **Run an inspection:** upload a photo and add notes.
+3. The backend **hashes** the payload and **anchors** it on Solana.
+4. View the database record, which now includes the **transaction signature**.
+5. Open **Solana Explorer** to see the anchored transaction.
+6. **Verify:** recompute the hash of the stored record and confirm it matches the on-chain anchor.
 
-Sign-in and profiles are Supabase Auth. Shipments, agreements, the audit trail, chat and
-invoices go in the Supabase Postgres database (their own `proofsettle` schema, which the
-public Data API doesn't expose), and evidence photos in a private Supabase Storage bucket
-(`evidence`). Without the settings below the backend falls back to a local SQLite file
-(`backend/proofsettle.db`) and folder (`backend/storage/evidence`), which is only for
-development.
+## Security & Privacy
 
-In `backend/.env` (git-ignored; never the committed root `.env`):
+- Only cryptographic hashes are anchored on-chain. Photos and notes remain private in the database.
+- Anchoring happens immediately when an inspection is completed, minimizing the window for tampering.
+- Backend logs and careful key management further reduce risk.
+- **Never commit private keys or `.env` files.** Use a secrets manager in production.
 
-```bash
-# Supabase -> Connect -> Session pooler. Note "+psycopg"; URL-encode special characters in the password.
-PROOFSETTLE_DATABASE_URL=postgresql+psycopg://postgres.<project-ref>:<password>@<host>.pooler.supabase.com:5432/postgres
-# Supabase -> Project Settings -> API Keys -> secret key. Server-side only.
-PROOFSETTLE_SUPABASE_SECRET_KEY=sb_secret_...
-```
+## Roadmap
 
-To move data that is already in the local files to Supabase (copies exactly, checks every
-photo hash and audit chain, and refuses if Supabase already has shipments):
+- [ ] Mobile-first camera UX and SDK
+- [ ] Multi-party signing and dispute resolution UI
+- [ ] Hardened key management
+- [ ] Enterprise integrations
+- [ ] Public verification API / marketplace
 
-```bash
-cd backend
-uv run python -m app.migrate
-```
+## Looking for Partners
 
-## AI inspection (Gemini)
+We're seeking pilot partners in logistics and cold-chain, mentorship on taking ProofSettle enterprise-ready, and support to build mobile SDKs and hardened key management. If that's you, reach out!
 
-"Run inspection" on a shipment sends its dispatch and receipt photos to Google's Gemini API
-(`backend/app/gemini.py`). Gemini reports the damage it sees as findings: which unit, which
-defect type, how confident it is, which photos show it, and whether it was already there at
-dispatch. The backend checks that output against a fixed schema and the photos it sent, then
-the settlement engine turns the findings into the proposed adjustment using the agreed terms.
-Gemini never sets an amount, and low-confidence findings go to a Reviewer.
+## Team
 
-To turn it on, add a key from https://aistudio.google.com/apikey to `backend/.env`
-(git-ignored; never the committed root `.env`) and restart the backend:
+**Team ProofSettle**
 
-```bash
-PROOFSETTLE_GEMINI_API_KEY=your-key
-# optional, default gemini-3.8-flash:
-PROOFSETTLE_GEMINI_MODEL=gemini-3.8-flash
-```
+- *Name* — [email@example.com](mailto:email@example.com)
+- *Name* — [email@example.com](mailto:email@example.com)
 
-Without a key, inspections use the built-in mock findings. All photos of one inspection go in
-one request, which Gemini caps at 20 MB.
+## License
 
-## Solana anchoring
+*Add a license (e.g., MIT) before publishing.*
 
-The FastAPI backend (`backend/`) can mirror every shipment's audit trail onto the ProofSettle
-Solana program (`programs/proofsettle/`, see its README). The database stays the source of
-truth. After each write, the backend sends the matching program instruction and stores the
-transaction signature on the audit event. The shipment page then links each event to
-Solana Explorer, and "Verify hashes" also checks the database against the on-chain record.
-Anchoring is off until it's configured, and if the RPC is down the app keeps working.
+---
 
-To turn it on (devnet; run from `backend/`):
-
-```bash
-uv run python -m app.chain keygen .solana        # four demo keys; prints the .env lines
-# add those lines plus PROOFSETTLE_SOLANA_RPC_URL=https://api.devnet.solana.com to
-# backend/.env (git-ignored; the root .env is committed, so keep keys out of it)
-uv run python -m app.chain fund --from ~/.config/solana/id.json --sol 0.2
-uv run python -m app.chain status                # balances and each shipment's state
-uv run uvicorn app.main:app                      # anchors pending history on startup
-```
-
-| Setting | Meaning |
-|---|---|
-| `PROOFSETTLE_SOLANA_RPC_URL` | JSON-RPC endpoint; anchoring is off when empty |
-| `PROOFSETTLE_SOLANA_{BUYER,SUPPLIER,AUTHORITY,REVIEWER}_KEYPAIR` | Keypair file path, or the keypair's JSON array. Server-side only |
-| `PROOFSETTLE_SOLANA_PROGRAM_ID` | Defaults to the address in `backend/app/chain/proofsettle.json` |
-| `PROOFSETTLE_SOLANA_SHIPMENT_SALT` | Change after `POST /dev/reset`, so reseeded shipments get fresh on-chain accounts |
-| `PROOFSETTLE_SOLANA_EXPLORER_CLUSTER` | Explorer link cluster, default `devnet` |
-
-The backend signs for all four parties with server-held demo keys. That's fine for a devnet
-demo, but those signatures don't prove each party's own consent (`backend/CHAIN_ALIGNMENT.md`
-§5).
+Built for [Hackathon Name]. Repo: [github.com/WillIAMShSp/proofsettle](https://github.com/WillIAMShSp/proofsettle)
