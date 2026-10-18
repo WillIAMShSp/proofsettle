@@ -1,89 +1,61 @@
-# ProofSettle: Solana program (Anchor)
+# Welcome to your Lovable project
 
-On-chain half of the PRD's "audit trail" (sections 8, 9, 10). It stores the agreement hash and rule
-parameters, evidence hashes, and the settlement decision, restricts each step to the right party, and
-emits an event for every change. It holds no funds (real escrow is a non-goal for the MVP).
+This project was built with [Lovable](https://lovable.dev).
 
-**Status: not compiled or run yet.** I wrote this against the Anchor 1.2.x docs but could not build it here.
-Expect to fix a small compile error or two on the first `anchor build`.
+## Build with Lovable
 
-## Layout
+Open your project in the [Lovable editor](https://lovable.dev) and keep building.
 
+- **Ship faster**: describe what you want to build and Lovable handles the code.
+- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
+- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+
+## Development
+
+Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+
+```sh
+git clone <this-repository-url>
+cd <repository-name>
+npm i
+npm run dev
 ```
-Anchor.toml, Cargo.toml, rust-toolchain.toml   Anchor workspace root
-programs/proofsettle/
-  Cargo.toml
-  src/lib.rs      instructions + account contexts
-  src/state.rs    Shipment, Evidence, enums
-  src/events.rs   audit events
-  src/errors.rs   error codes
-tests/proofsettle.ts   demo Case A (accepted), Case B (disputed), auth guards, verify_evidence
-tests/package.json     test-only deps (kept apart from the web app's package.json)
-```
 
-## Setup (Anchor 1.2.x)
+## Built with
 
-The Anchor workspace lives in this repo next to the web app (`Anchor.toml`, `Cargo.toml`,
-`rust-toolchain.toml` at the root). The program tests have their own `tests/package.json` so the
-web app's `package.json` / `bun.lock` (synced with Lovable) are not touched. `target/` and `.anchor/`
-are git-ignored and excluded from ESLint/Prettier.
+- TanStack Start
+- TypeScript
+- React
+- Tailwind CSS
+
+## Solana anchoring
+
+The FastAPI backend (`backend/`) can mirror every shipment's audit trail onto the ProofSettle
+Solana program (`programs/proofsettle/`, see its README). The database stays the source of
+truth. After each write, the backend sends the matching program instruction and stores the
+transaction signature on the audit event. The shipment page then links each event to
+Solana Explorer, and "Verify hashes" also checks the database against the on-chain record.
+Anchoring is off until it's configured, and if the RPC is down the app keeps working.
+
+To turn it on (devnet; run from `backend/`):
 
 ```bash
-avm install 1.2.1 && avm use 1.2.1
-(cd tests && npm install)   # mocha, chai, @anchor-lang/core, @solana/web3.js
-anchor keys sync            # replaces the placeholder program ID in lib.rs and Anchor.toml
-anchor build
-anchor test
+uv run python -m app.chain keygen .solana        # four demo keys; prints the .env lines
+# add those lines plus PROOFSETTLE_SOLANA_RPC_URL=https://api.devnet.solana.com to
+# backend/.env (git-ignored; the root .env is committed, so keep keys out of it)
+uv run python -m app.chain fund --from ~/.config/solana/id.json --sol 0.2
+uv run python -m app.chain status                # balances and each shipment's state
+uv run uvicorn app.main:app                      # anchors pending history on startup
 ```
 
-Anchor 1.x moved the TypeScript client to `@anchor-lang/core` (the old `@coral-xyz/anchor` is no longer
-the supported path), and `anchor test` now uses Surfpool by default, so install that first.
+| Setting | Meaning |
+|---|---|
+| `PROOFSETTLE_SOLANA_RPC_URL` | JSON-RPC endpoint; anchoring is off when empty |
+| `PROOFSETTLE_SOLANA_{BUYER,SUPPLIER,AUTHORITY,REVIEWER}_KEYPAIR` | Keypair file path, or the keypair's JSON array. Server-side only |
+| `PROOFSETTLE_SOLANA_PROGRAM_ID` | Defaults to the address in `backend/app/chain/proofsettle.json` |
+| `PROOFSETTLE_SOLANA_SHIPMENT_SALT` | Change after `POST /dev/reset`, so reseeded shipments get fresh on-chain accounts |
+| `PROOFSETTLE_SOLANA_EXPLORER_CLUSTER` | Explorer link cluster, default `devnet` |
 
-## State machine
-
-```
-Draft --(buyer + supplier approve)--> Agreed --(dispatch photo + mark_in_transit)--> InTransit
-  --(buyer records receipt photo)--> Inspection --(authority proposes)--> Proposed
-  Proposed --accept--> Accepted
-  Proposed --dispute--> Disputed --(authority resolves)--> Resolved
-```
-
-## Instructions
-
-| Instruction | Who signs | Effect | PRD endpoint |
-|---|---|---|---|
-| `create_shipment` | buyer | Registers parties, `terms_hash`, invoice, quantity, rule | `POST /shipments` + `/agreement` |
-| `approve_agreement` | buyer, then supplier | Must pass the same `terms_hash`; both approved -> `Agreed` | `POST /agreement/approve` |
-| `record_evidence` | supplier (dispatch) / buyer (receipt) | Stores SHA-256 in an `Evidence` PDA | `POST /evidence` |
-| `mark_in_transit` | supplier | Needs >= 1 dispatch hash | (status change) |
-| `propose_adjustment` | authority | Computes amount from the stored rule | `POST /adjustment` |
-| `accept_adjustment` | supplier | -> `Accepted` | `POST /adjustments/{id}/decision` |
-| `dispute_adjustment` | supplier | Stores reason hash -> `Disputed` | `POST /adjustments/{id}/decision` |
-| `resolve_dispute` | authority | Final amount (<= invoice) -> `Resolved` | (review flow) |
-| `verify_evidence` | anyone | Emits `EvidenceVerified { matches }` | `POST /audit/{id}/verify` |
-
-## PDAs
-
-- Shipment: `["shipment", shipment_id]`, where `shipment_id` is the 16 bytes of the Supabase UUID
-- Evidence: `["evidence", shipment, index_le_u16]`
-
-## How it maps to the PRD's rules
-
-- **"AI must not decide the amount."** `propose_adjustment` takes a defect count, not an amount:
-  `min(defects x credit_per_defect, max_adjustment, invoice)`. The caller cannot override it.
-- **Authority.** One key (the FastAPI backend, or a human reviewer) proposes and resolves. It cannot send
-  funds anywhere because the program holds none. Both parties see its address before approving.
-- **Terms hash.** Put the authority key and the numeric rule parameters inside `terms_json`, so the hash
-  both sides approve also commits to them. The program checks the hash matches, not the JSON itself.
-- **Audit trail.** Every state change emits an event with a per-shipment `seq`. Store the transaction
-  signature in `audit_events.tx_hash`; gaps in `seq` mean a missed event.
-- **Chain down.** Treat chain writes as best-effort in the backend so the app keeps working (PRD section 9).
-
-## Known limits
-
-- A hash proves bytes are unchanged since recording, not when or where a photo was taken.
-- No timeouts or cancellation (for example, auto-release after 48 hours). Easy to add with `Clock`.
-- The authority is trusted for proposals and dispute resolution; multi-sig or a reviewer role split is a
-  natural next step.
-- An on-chain hash chain over events was left out to avoid depending on hashing helpers whose Anchor 1.x
-  re-exports I couldn't confirm. The ledger plus `seq` already gives ordering.
+The backend signs for all four parties with server-held demo keys. That's fine for a devnet
+demo, but those signatures don't prove each party's own consent (`backend/CHAIN_ALIGNMENT.md`
+§5).

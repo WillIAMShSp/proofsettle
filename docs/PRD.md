@@ -356,7 +356,7 @@ Structured outputs for downstream processing.
 
 Blockchain
 
-Solana program written with Anchor (branch feat/solana-blockchain).
+Solana program written with Anchor (programs/proofsettle), mirrored from the backend (backend/app/chain, see backend/CHAIN_ALIGNMENT.md).
 
 Local Solana validator or devnet.
 

@@ -6,3 +6,6 @@ __pycache__/
 
 # Uploaded evidence files (seeded copies of src/assets)
 storage/
+
+# Solana demo keypairs (python -m app.chain keygen .solana)
+.solana/

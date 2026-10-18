@@ -48,7 +48,10 @@ def keygen(directory: Path) -> None:
             path.write_text(kp.to_json(), encoding="utf-8")
             print(f"created  {path} ({kp.pubkey()})")
         lines.append(f"PROOFSETTLE_SOLANA_{signer.value.upper()}_KEYPAIR={path.resolve().as_posix()}")
-    print("\nAdd to .env (with PROOFSETTLE_SOLANA_RPC_URL):\n" + "\n".join(lines))
+    print(
+        "\nAdd to backend/.env (git-ignored; not the committed root .env), "
+        "with PROOFSETTLE_SOLANA_RPC_URL:\n" + "\n".join(lines)
+    )
 
 
 def fund(chain: Chain, funder_path: str, sol: float) -> None:

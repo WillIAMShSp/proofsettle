@@ -422,9 +422,15 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
       "txHash": null,
       "chainStatus": "skipped"
     }
-  ]
+  ],
+
+  "chain": null
 }
 ```
+
+`chain` is `null` unless the backend has Solana anchoring configured. When it does, `chain`
+is `{ "programId", "address", "explorerCluster" }`: `address` is the shipment's program
+account, and `explorerCluster` is the Solana Explorer `cluster` query value (e.g. `"devnet"`).
 
 `adjustment` is the engine's `Adjustment` output (see Settlement engine), computed fresh
 from the stored terms and findings on every request, plus the stored record's `id` and
@@ -451,8 +457,12 @@ So on the seeded PS-1042 (`Proposed`, nobody accepted yet), Buyer and Supplier b
 while the Supplier still sees both `true`.
 `evidence[].kind` is `"dispatch" | "receipt"`; the UI's "Dispatch photos" / "Receipt photos"
 headings map to these. `events[].txHash` is the Solana transaction signature, set only once the event is anchored
-on-chain. `chainStatus` is `pending | confirmed | failed | skipped`, and is `skipped` for
-everything until chain anchoring exists. `hash` is the event's `eventHash` and `prevHash` is
+on-chain. `chainStatus` is `pending | confirmed | failed | skipped`. Without a chain, every
+event is `skipped`. With one, an event that has an on-chain counterpart starts `pending` and
+becomes `confirmed` (with `txHash`), or `failed` if the RPC or program refused it; failed
+events are retried. `inspection.completed` and `finding.reviewed` have no counterpart and
+stay `skipped` (see `CHAIN_ALIGNMENT.md` §3). Anchoring runs after the write's response, so
+a client polls the detail while any event is `pending`. `hash` is the event's `eventHash` and `prevHash` is
 its `prevEventHash` (see Hashing). `id`, `seq`, `type`, `payloadHash`, `prevHash`, `txHash`
 and `chainStatus` are additions to `AuditEvent`; the existing four fields are unchanged.
 
@@ -514,7 +524,8 @@ Routes with a body reject unknown fields with `422`.
 | `POST /shipments/{id}/dispute` | Buyer, Supplier | `{ "reason": "..." }` (≤ 400 chars) | `Proposed → Disputed`. A missing or blank reason → `400`. Refused (`409`) once the caller has accepted. |
 | `POST /findings/{id}/review` | Reviewer | `{ "decision": "confirmed" \| "rejected" }` | Sets `reviewOverride` while `Disputed`. Deciding again replaces the decision. |
 | `POST /shipments/{id}/resolve` | Reviewer | none | `Disputed → Resolved` with the engine's recomputed adjustment. `409` while `needsReview` is non-empty. |
-| `POST /dev/reset` | none | none | Only when `PROOFSETTLE_DEV_MODE=true` (otherwise `404`): drops every table, reloads the seed and deletes uploaded files. Returns `{ "shipments": ["PS-1042", "PS-1038", "PS-1031"] }`. |
+| `POST /shipments/{id}/chain/anchor` | any | none | Sends whatever of the shipment's history isn't on Solana yet, now, and returns the detail. Retries `failed` events. `409` when no chain is configured. Appends no audit event. |
+| `POST /dev/reset` | none | none | Only when `PROOFSETTLE_DEV_MODE=true` (otherwise `404`): drops every table, reloads the seed and deletes uploaded files. Returns `{ "shipments": ["PS-1042", "PS-1038", "PS-1031"] }`. With a chain configured, change `PROOFSETTLE_SOLANA_SHIPMENT_SALT` afterwards, or the reseeded shipments meet an earlier run's on-chain accounts. |
 
 Evidence uploads:
 
@@ -570,9 +581,12 @@ detail's `evidence[].verified` shows it from then on. Any role.
   becomes `"${checked} hashes verified"`, or a failure state when `verified` is `false`.
 - A missing evidence file has `recomputedHash: null` and `ok: false`.
 - `agreement.recomputedHash` is `sha256(canonical_json(stored terms))`.
-- `chain.available: false` means the chain was unreachable. Anchoring doesn't exist yet, so
-  it is always `false` for now. Verification still succeeds on local hashes alone (PRD §9:
-  the app must work without the blockchain).
+- `chain` compares the database with the shipment's Solana record (`CHAIN_ALIGNMENT.md`
+  §3). `available: false` means no chain is configured or the RPC was unreachable; then
+  verification succeeds on local hashes alone (PRD §9: the app must work without the
+  blockchain). When `available`, `anchored` counts the `confirmed` events, and any entry in
+  `mismatches` (e.g. `"evidence ev_09's stored SHA-256 no longer matches the chain"`) makes
+  `verified` false, even if every local hash checks out.
 
 ## Hashing (implemented: `backend/app/hashing.py`, `backend/app/audit.py`)
 
@@ -603,7 +617,8 @@ list) and `adjustmentHash` (of the engine's `Adjustment`).
 
 For the chain, each shipment also has a stable `chainUuid = uuid5(namespace, id)`, e.g.
 `PS-1042` → `867aec08-fe1b-5d73-8f38-b2fb1e862ae8`. Its 16 bytes are the program's shipment
-PDA seed. It is not exposed in the API yet.
+PDA seed (salted when `PROOFSETTLE_SOLANA_SHIPMENT_SALT` is set). The detail's
+`chain.address` is the resulting account.
 `evidence.sha256` is the SHA-256 of the raw uploaded bytes. As the PRD says, a matching
 hash shows the bytes are unchanged. It does not prove when or where a photo was taken.
 
