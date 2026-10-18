@@ -16,15 +16,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import AwareDatetime, StringConstraints
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app import operations as ops
 from app.audit import ChainVerification, EventCheck, verify_chain
 from app.auth import current_actor
+from app.chain import get_chain
+from app.chain.anchoring import anchor_in_background, anchor_shipment, check_shipment, shipment_address
 from app.config import settings
 from app.db import get_db
 from app.findings import Finding, ReviewOverride
@@ -138,6 +140,16 @@ class EventOut(CamelModel):
     chain_status: ChainStatus
 
 
+class ChainOut(CamelModel):
+    """Where this shipment lives on Solana; null in the detail when no chain is configured."""
+
+    program_id: str
+    address: str  # the shipment PDA
+    # Explorer `cluster` query value, e.g. "devnet":
+    # https://explorer.solana.com/tx/<txHash>?cluster=<explorerCluster>
+    explorer_cluster: str
+
+
 class ShipmentDetail(ShipmentSummary):
     dispute_reason: str | None
     agreement: AgreementOut | None
@@ -146,6 +158,7 @@ class ShipmentDetail(ShipmentSummary):
     adjustment: AdjustmentOut | None
     actions: Actions
     events: tuple[EventOut, ...]
+    chain: ChainOut | None
 
 
 class AuditOut(CamelModel):
@@ -268,11 +281,27 @@ def _detail(s: Shipment, role: Actor) -> ShipmentDetail:
         adjustment=_adjustment(s.adjustment, live) if s.adjustment and live else None,
         actions=_actions(s, role, live),
         events=tuple(_event(e) for e in s.events),
+        chain=_chain_out(s),
     )
 
 
-def _committed(db: Session, shipment_id: str, role: Actor) -> ShipmentDetail:
+def _chain_out(s: Shipment) -> ChainOut | None:
+    chain = get_chain()
+    if chain is None:
+        return None
+    return ChainOut(
+        program_id=str(chain.program_id),
+        address=str(shipment_address(s, chain)),
+        explorer_cluster=chain.explorer_cluster,
+    )
+
+
+def _committed(db: Session, shipment_id: str, role: Actor, tasks: BackgroundTasks) -> ShipmentDetail:
+    """Commit the write, then (after the response) mirror it on-chain if a chain is configured."""
     db.commit()
+    if get_chain() is not None:
+        sessions = sessionmaker(bind=db.get_bind(), autoflush=False, expire_on_commit=False)
+        tasks.add_task(anchor_in_background, sessions, shipment_id)
     return _detail(_load(db, shipment_id), role)
 
 
@@ -332,22 +361,27 @@ def get_evidence_file(evidence_id: str, db: Db, root: EvidenceRoot) -> FileRespo
 
 
 @router.post("/shipments", status_code=201)
-def create_shipment(body: NewShipment, db: Db, role: Role) -> ShipmentDetail:
+def create_shipment(body: NewShipment, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     s = ops.create_shipment(
         db, role, title=body.title, buyer=BUYER, supplier=body.supplier, terms=body.terms, now=_now()
     )
-    return _committed(db, s.id, role)
+    return _committed(db, s.id, role, tasks)
 
 
 @router.post("/shipments/{shipment_id}/agreement/approve")
-def approve_agreement(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
+def approve_agreement(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.approve_agreement(_load(db, shipment_id, lock=True), role, _now())
-    return _committed(db, shipment_id, role)
+    return _committed(db, shipment_id, role, tasks)
 
 
 @router.post("/shipments/{shipment_id}/evidence")
 def upload_evidence(
-    shipment_id: str, db: Db, role: Role, root: EvidenceRoot, files: Annotated[list[UploadFile], File()]
+    shipment_id: str,
+    db: Db,
+    role: Role,
+    root: EvidenceRoot,
+    tasks: BackgroundTasks,
+    files: Annotated[list[UploadFile], File()],
 ) -> ShipmentDetail:
     s = _load(db, shipment_id, lock=True)
     ops.upload_slot(s, role)  # 403/409 before looking at the files
@@ -355,7 +389,7 @@ def upload_evidence(
         raise HTTPException(413, f"At most {settings.max_evidence_files} files per upload")
     written = ops.add_evidence(s, role, [_read_image(f) for f in files], root, _now())
     try:
-        return _committed(db, shipment_id, role)
+        return _committed(db, shipment_id, role, tasks)
     except Exception:
         for path in written:
             path.unlink(missing_ok=True)
@@ -363,42 +397,60 @@ def upload_evidence(
 
 
 @router.post("/shipments/{shipment_id}/inspect")
-def inspect(shipment_id: str, db: Db, role: Role, root: EvidenceRoot, provider: Provider) -> ShipmentDetail:
+def inspect(
+    shipment_id: str, db: Db, role: Role, root: EvidenceRoot, provider: Provider, tasks: BackgroundTasks
+) -> ShipmentDetail:
     ops.run_inspection(_load(db, shipment_id, lock=True), role, provider, root, _now())
-    return _committed(db, shipment_id, role)
+    return _committed(db, shipment_id, role, tasks)
 
 
 @router.post("/shipments/{shipment_id}/accept")
-def accept(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
+def accept(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.accept_adjustment(_load(db, shipment_id, lock=True), role, _now())
-    return _committed(db, shipment_id, role)
+    return _committed(db, shipment_id, role, tasks)
 
 
 @router.post("/shipments/{shipment_id}/dispute")
-def dispute(shipment_id: str, db: Db, role: Role, body: DisputeIn | None = None) -> ShipmentDetail:
+def dispute(
+    shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks, body: DisputeIn | None = None
+) -> ShipmentDetail:
     ops.dispute_adjustment(_load(db, shipment_id, lock=True), role, body.reason if body else None, _now())
-    return _committed(db, shipment_id, role)
+    return _committed(db, shipment_id, role, tasks)
 
 
 @router.post("/findings/{finding_id}/review")
-def review_finding(finding_id: str, body: ReviewIn, db: Db, role: Role) -> ShipmentDetail:
+def review_finding(finding_id: str, body: ReviewIn, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     row = db.get(FindingRow, finding_id)
     if row is None:
         raise HTTPException(404, f"Unknown finding {finding_id}")
     s = _load(db, row.shipment_id, lock=True)
     ops.review(s, row, role, body.decision, _now())
-    return _committed(db, s.id, role)
+    return _committed(db, s.id, role, tasks)
 
 
 @router.post("/shipments/{shipment_id}/resolve")
-def resolve(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
+def resolve(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.resolve_dispute(_load(db, shipment_id, lock=True), role, _now())
-    return _committed(db, shipment_id, role)
+    return _committed(db, shipment_id, role, tasks)
+
+
+@router.post("/shipments/{shipment_id}/chain/anchor")
+def anchor(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
+    """Send whatever of this shipment's history isn't on-chain yet, now (retries failures)."""
+    chain = get_chain()
+    if chain is None:
+        raise HTTPException(409, "Solana anchoring is not configured")
+    _load(db, shipment_id)  # 404 for an unknown id
+    anchor_shipment(db, shipment_id, chain)
+    return _detail(_load(db, shipment_id), role)
 
 
 @router.post("/shipments/{shipment_id}/audit/verify")
 def verify_audit(shipment_id: str, db: Db, role: Role, root: EvidenceRoot) -> ops.Verification:
-    result = ops.verify(_load(db, shipment_id, lock=True), root, _now())
+    # The chain is read first, without the row lock, so a slow RPC doesn't hold up writes.
+    report = check_shipment(_load(db, shipment_id), get_chain())
+    chain = ops.ChainCheck(available=report.available, anchored=report.anchored, mismatches=report.mismatches)
+    result = ops.verify(_load(db, shipment_id, lock=True), root, _now(), chain=chain)
     db.commit()  # each evidence item's `verified`
     return result
 

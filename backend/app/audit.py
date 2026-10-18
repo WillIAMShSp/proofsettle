@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session
 
+from app.chain import get_chain
 from app.hashing import canonical_json, hash_json, jsonable
 from app.models import AuditEvent, ChainStatus, Shipment
 from app.schemas import CamelModel
@@ -34,6 +35,22 @@ class EventType(StrEnum):
     ADJUSTMENT_DISPUTED = "adjustment.disputed"
     FINDING_REVIEWED = "finding.reviewed"
     DISPUTE_RESOLVED = "dispute.resolved"
+
+
+# Events with an on-chain counterpart (app.chain.anchoring). Inspection results and single
+# finding reviews have none: the program sees findings only through propose and resolve.
+ANCHORED_EVENT_TYPES: frozenset[EventType] = frozenset(
+    {
+        EventType.AGREEMENT_DRAFTED,
+        EventType.AGREEMENT_APPROVED,
+        EventType.EVIDENCE_UPLOADED,
+        EventType.STATUS_CHANGED,
+        EventType.ADJUSTMENT_PROPOSED,
+        EventType.ADJUSTMENT_ACCEPTED,
+        EventType.ADJUSTMENT_DISPUTED,
+        EventType.DISPUTE_RESOLVED,
+    }
+)
 
 
 def iso_utc(at: datetime) -> str:
@@ -112,7 +129,10 @@ def append_event(
             payload_hash=payload_hash,
             prev_event_hash=prev,
         ),
-        chain_status=ChainStatus.SKIPPED,  # no chain anchoring yet
+        # Pending until app.chain.anchoring sends it; skipped when there's no chain counterpart.
+        chain_status=ChainStatus.PENDING
+        if type in ANCHORED_EVENT_TYPES and get_chain() is not None
+        else ChainStatus.SKIPPED,
     )
     db.add(event)
     db.flush()

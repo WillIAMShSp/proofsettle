@@ -46,5 +46,33 @@ class Settings(BaseSettings):
     # Enables POST /dev/reset, which drops every table and reloads the demo seed.
     dev_mode: bool = False
 
+    # --- Solana anchoring (app/chain). Off unless the RPC URL and all four keypairs are set.
+    # JSON-RPC endpoint, e.g. https://api.devnet.solana.com or http://127.0.0.1:8899.
+    solana_rpc_url: str = ""
+    # Defaults to the address in app/chain/proofsettle.json (the IDL `anchor build` wrote).
+    solana_program_id: str = ""
+    # Demo keys the backend signs with (custodial, see CHAIN_ALIGNMENT.md §5). Each is a path
+    # to a Solana keypair file, or the keypair's JSON array itself. Never sent to clients.
+    solana_buyer_keypair: str = ""
+    solana_supplier_keypair: str = ""
+    solana_authority_keypair: str = ""
+    solana_reviewer_keypair: str = ""
+    # Mixed into each shipment's PDA seed. Change it after POST /dev/reset so the reseeded
+    # shipments get fresh on-chain accounts instead of an earlier run's.
+    solana_shipment_salt: str = ""
+    # Explorer `cluster` query for links in the UI: devnet, or for a local validator
+    # "custom&customUrl=http://127.0.0.1:8899".
+    solana_explorer_cluster: str = "devnet"
+
+    @property
+    def solana_enabled(self) -> bool:
+        keys = (
+            self.solana_buyer_keypair,
+            self.solana_supplier_keypair,
+            self.solana_authority_keypair,
+            self.solana_reviewer_keypair,
+        )
+        return bool(self.solana_rpc_url) and all(keys)
+
 
 settings = Settings()

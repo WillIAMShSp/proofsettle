@@ -424,11 +424,14 @@ class Verification(CamelModel):
     verified_at: AwareDatetime
 
 
-def verify(s: Shipment, root: Path, now: datetime) -> Verification:
+def verify(s: Shipment, root: Path, now: datetime, *, chain: ChainCheck | None = None) -> Verification:
     """Re-hash the agreement terms and every evidence file, and walk the event chain.
 
-    Sets each evidence item's `verified` to its result.
+    Sets each evidence item's `verified` to its result. `chain` is the comparison with the
+    on-chain record (app.chain.anchoring.check_shipment); when the chain was reachable, any
+    mismatch fails the verification too. Unreachable or unconfigured, local hashes decide.
     """
+    chain = chain or ChainCheck(available=False, anchored=0, mismatches=())
     agreement = None
     if s.agreement:
         recomputed = hash_json(s.agreement.terms)
@@ -449,15 +452,15 @@ def verify(s: Shipment, root: Path, now: datetime) -> Verification:
         ev.verified = recomputed == ev.sha256
         evidence.append(HashCheck(id=ev.id, stored_hash=ev.sha256, recomputed_hash=recomputed, ok=ev.verified))
 
-    chain = verify_chain(_db(s), s)
+    events = verify_chain(_db(s), s)
     items = [*evidence, *([agreement] if agreement else [])]
     return Verification(
         shipment_id=s.id,
-        verified=chain.verified and all(c.ok for c in items),
-        checked=chain.checked + len(items),
+        verified=events.verified and all(c.ok for c in items) and not chain.mismatches,
+        checked=events.checked + len(items),
         agreement=agreement,
-        events=chain.events,
+        events=events.events,
         evidence=tuple(evidence),
-        chain=ChainCheck(available=False, anchored=0, mismatches=()),  # no chain anchoring yet
+        chain=chain,
         verified_at=now,
     )

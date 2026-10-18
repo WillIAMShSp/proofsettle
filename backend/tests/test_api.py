@@ -22,6 +22,7 @@ DETAIL_KEYS = SUMMARY_KEYS | {
     "adjustment",
     "actions",
     "events",
+    "chain",
 }
 AGREEMENT_KEYS = {"terms", "buyerApproved", "supplierApproved", "termsHash"}
 EVIDENCE_KEYS = {"id", "kind", "url", "sha256", "uploadedBy", "at", "verified"}
@@ -99,6 +100,7 @@ def test_list_matches_dashboard_shape(client):
 def test_detail_shape(client):
     d = client.get("/shipments/PS-1042", headers=BUYER).json()
     assert set(d) == DETAIL_KEYS
+    assert d["chain"] is None  # no Solana configured in tests
     assert set(d["agreement"]) == AGREEMENT_KEYS
     assert d["agreement"]["buyerApproved"] and d["agreement"]["supplierApproved"]
     assert d["agreement"]["terms"]["compensation"] == {

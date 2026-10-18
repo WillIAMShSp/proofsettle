@@ -1,3 +1,5 @@
+import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -10,13 +12,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.chain import get_chain
+from app.chain.anchoring import anchor_all
 from app.config import settings
-from app.db import create_tables, engine, get_db
+from app.db import SessionLocal, create_tables, engine, get_db
 from app.inspection import InspectionFailed
 from app.routes import router
 from app.workflow import TransitionError
 
 JSON_UTF8 = b"application/json; charset=utf-8"
+log = logging.getLogger(__name__)
 
 
 class JSONCharsetMiddleware:
@@ -46,9 +51,25 @@ class JSONCharsetMiddleware:
         await self.app(scope, receive, send_with_charset)
 
 
+def _anchor_backlog() -> None:
+    """Mirror anything not on-chain yet (seeded history, events from an RPC outage)."""
+    chain = get_chain()
+    if chain is None:
+        return
+    try:
+        with SessionLocal() as db:
+            for r in anchor_all(db, chain):
+                if r.error:
+                    log.warning("Startup anchoring of %s stopped: %s", r.shipment_id, r.error)
+    except Exception:
+        log.exception("Startup anchoring crashed")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     create_tables(engine)
+    if get_chain() is not None:
+        threading.Thread(target=_anchor_backlog, name="anchor-backlog", daemon=True).start()
     yield
 
 
