@@ -7,6 +7,7 @@ import {
   USE_MOCK,
   httpApi,
   type Api,
+  type ChatMessage,
   type Role,
   type ShipmentDetail,
   type ShipmentSummary,
@@ -24,7 +25,13 @@ export const keys = {
   list: (account: Account) => ["shipments", account] as const,
   detail: (id: string, account: Account, role: Role | null) =>
     ["shipment", id, account, role] as const,
+  // `mine` on each message depends on the caller too.
+  messages: (id: string, account: Account, role: Role | null) =>
+    ["messages", id, account, role] as const,
 };
+
+/** How often an open thread asks for new messages. Paused while the tab is hidden. */
+const MESSAGE_POLL_MS = 4000;
 
 function useAccount() {
   const { user, role } = useStore();
@@ -116,6 +123,44 @@ export function useVerifyAudit(id: string) {
     mutationFn: () => api.verifyAudit(id),
     // Each evidence item's `verified` is stored by the run, so refresh the detail.
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shipment", id] }),
+  });
+}
+
+export function useMessages(id: string) {
+  const { account, role } = useAccount();
+  return useQuery({
+    queryKey: keys.messages(id, account, role),
+    queryFn: () => api.listMessages(id),
+    enabled: role !== null,
+    refetchInterval: MESSAGE_POLL_MS,
+  });
+}
+
+/** Append a message this account just sent, without waiting for the next poll. */
+function useAppendMessage(id: string) {
+  const qc = useQueryClient();
+  const { account, role } = useAccount();
+  return (message: ChatMessage) =>
+    qc.setQueryData<ChatMessage[]>(keys.messages(id, account, role), (list) =>
+      list?.some((m) => m.id === message.id) ? list : [...(list ?? []), message],
+    );
+}
+
+/** Send with `send.mutate(body)`. */
+export function useSendMessage(id: string) {
+  const append = useAppendMessage(id);
+  return useMutation({
+    mutationFn: (body: string) => api.sendMessage(id, body),
+    onSuccess: append,
+  });
+}
+
+/** Supplier only: `invoice.mutate(note)`, the note being optional. */
+export function useSendInvoice(id: string) {
+  const append = useAppendMessage(id);
+  return useMutation({
+    mutationFn: (note?: string) => api.sendInvoice(id, note),
+    onSuccess: append,
   });
 }
 

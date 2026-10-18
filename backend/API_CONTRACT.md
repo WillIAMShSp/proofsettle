@@ -600,6 +600,68 @@ detail's `evidence[].verified` shows it from then on. Any role.
   `mismatches` (e.g. `"evidence ev_09's stored SHA-256 no longer matches the chain"`) makes
   `verified` false, even if every local hash checks out.
 
+### Messages: Buyer ↔ Supplier chat and invoices (implemented)
+
+Each shipment has one conversation thread between its Buyer and Supplier, stored in
+`chat_messages` (`ChatMessage` in `backend/app/models.py`). Chat is **not** settlement
+state: sending a message or an invoice never changes a status or an amount, never appends an
+audit event, is not hashed into the chain, and is not anchored on Solana.
+
+Access follows shipment visibility (see "Visibility"): an account that gets `404` on
+`GET /shipments/{id}` also gets `404` here, so a private thread reaches only the two
+connected accounts (and Reviewers, who can read it). Only `Buyer` and `Supplier` may send
+messages, and only the `Supplier` (the manufacturer) may send an invoice.
+
+| Endpoint | Role | Body | Effect |
+|----------|------|------|--------|
+| `GET /shipments/{id}/messages` | any who can see the shipment | none | The thread, oldest first. |
+| `POST /shipments/{id}/messages` | Buyer, Supplier | `{ "body": "..." }` (trimmed, 1–2000 chars; unknown fields → `422`) | Appends one message. Returns `201` with the message. |
+| `POST /shipments/{id}/messages/invoice` | Supplier | none, or `{ "note": "..." }` (1–2000 chars; any other field, such as an amount, → `422`) | Appends an invoice message. `409` while `Draft` (terms not approved by both). Returns `201` with the message. |
+
+```json
+{
+  "id": "msg_03",
+  "shipmentId": "PS-1031",
+  "at": "2026-10-18T09:30:00Z",
+  "authorRole": "Supplier",
+  "authorName": "Ferro Precision Works",
+  "body": "Invoice INV-PS-1031-01: $3,735 due",
+  "mine": false,
+  "invoice": {
+    "number": "INV-PS-1031-01",
+    "issuedAt": "2026-10-18T09:30:00Z",
+    "shipmentId": "PS-1031",
+    "title": "250 steel brackets",
+    "seller": "Ferro Precision Works",
+    "buyer": "Northgate Assembly Ltd",
+    "itemDescription": "Steel mounting bracket",
+    "quantity": 250,
+    "unitPrice": 15,
+    "subtotal": 3750,
+    "final": true,
+    "credit": 15,
+    "amountDue": 3735,
+    "status": "Resolved",
+    "termsHash": "…"
+  }
+}
+```
+
+- `invoice` is `null` on a plain message. On an invoice it is a snapshot taken when sent;
+  later changes to the shipment never rewrite it. Send another for updated numbers.
+- Every invoice amount comes from the shipment, never from the request. `subtotal` is the
+  agreed invoice amount. While `Accepted` or `Resolved`, `final` is `true`, `credit` is the
+  settled defect credit and `amountDue` the adjustment's `settlementAmount`. Before that,
+  `final` is `false`, `credit` is `null` and `amountDue` is the subtotal.
+- `number` is `INV-<shipment>-<nn>`, counting the shipment's invoices. `termsHash` is the
+  approved agreement, the one anchored on Solana.
+- `body` is the covering note, or `Invoice <number>: <amount> due` without one.
+- `authorName` is the sender's profile name, else their email, else their role (dev login).
+- `mine` is computed for the caller: sent by this account's user id (for a dev login, which
+  has no account, by this role).
+- The frontend polls `GET .../messages` every 4 s while the tab is visible.
+- `POST /dev/reset` deletes every message along with the other tables.
+
 ## Hashing (implemented: `backend/app/hashing.py`, `backend/app/audit.py`)
 
 ```

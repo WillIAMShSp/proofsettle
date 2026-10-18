@@ -9,6 +9,7 @@ import dispatchImg from "@/assets/dispatch.jpg";
 import receiptImg from "@/assets/receipt.jpg";
 import {
   ApiError,
+  MAX_MESSAGE_LENGTH,
   getStoredRole,
   type Actions,
   type Actor,
@@ -16,6 +17,7 @@ import {
   type AgreementTerms,
   type Api,
   type AuditEvent,
+  type ChatMessage,
   type Evidence,
   type Finding,
   type FindingOutcome,
@@ -70,6 +72,45 @@ function find(id: string): MockShipment {
   const s = load().find((x) => x.id === id);
   if (!s) throw new ApiError(404, `Unknown shipment ${id}`);
   return s;
+}
+
+// Chat lives beside the shipments, not in them, as on the backend. `mine` is set on read.
+const MESSAGES_KEY = "ps-mock-messages";
+type StoredMessage = Omit<ChatMessage, "mine" | "invoice"> & { invoice?: ChatMessage["invoice"] };
+
+let messageCache: StoredMessage[] | null = null;
+
+function loadMessages(): StoredMessage[] {
+  if (messageCache) return messageCache;
+  try {
+    const raw = localStorage.getItem(MESSAGES_KEY);
+    if (raw) return (messageCache = JSON.parse(raw) as StoredMessage[]);
+  } catch {
+    // unreadable storage: start with no messages
+  }
+  return (messageCache = []);
+}
+
+function saveMessages() {
+  try {
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(messageCache));
+  } catch {
+    // storage full or blocked: keep the in-memory state
+  }
+}
+
+function addMessage(m: Omit<StoredMessage, "id">): ChatMessage {
+  const all = loadMessages();
+  const stored: StoredMessage = {
+    ...m,
+    id: nextId(
+      "msg",
+      all.map((x) => x.id),
+    ),
+  };
+  all.push(stored);
+  saveMessages();
+  return { ...stored, invoice: stored.invoice ?? null, mine: true };
 }
 
 function role(): Role {
@@ -569,9 +610,73 @@ export const mockApi: Api = {
     };
   },
 
+  // The mock has a role but no account, so a message is "mine" when this role sent it.
+  listMessages: async (id) => {
+    const r = role();
+    find(id);
+    return loadMessages()
+      .filter((m) => m.shipmentId === id)
+      .map((m) => ({ ...m, invoice: m.invoice ?? null, mine: m.authorRole === r }));
+  },
+
+  sendMessage: async (id, body) => {
+    const r = role();
+    find(id);
+    if (r === "Reviewer") throw new ApiError(403, "Only the Buyer and Supplier can send messages");
+    const text = body.trim();
+    if (!text || text.length > MAX_MESSAGE_LENGTH)
+      throw new ApiError(422, `A message is 1 to ${MAX_MESSAGE_LENGTH} characters`);
+    return addMessage({ shipmentId: id, at: now(), authorRole: r, authorName: r, body: text });
+  },
+
+  // As the backend: numbers from the terms and, once settled, the adjustment.
+  sendInvoice: async (id, note) => {
+    const r = role();
+    const s = find(id);
+    if (r !== "Supplier")
+      throw new ApiError(403, "Only the Supplier (manufacturer) can send an invoice");
+    if (!s.agreement || s.status === "Draft")
+      throw new ApiError(409, "Both parties must approve the terms before an invoice can be sent");
+    const text = note?.trim();
+    if (note !== undefined && (!text || text.length > MAX_MESSAGE_LENGTH))
+      throw new ApiError(422, `A note is 1 to ${MAX_MESSAGE_LENGTH} characters`);
+    const terms = s.agreement.terms;
+    const settled = s.status === "Accepted" || s.status === "Resolved";
+    const adj = settled ? liveAdjustment(s) : null;
+    const issued = loadMessages().filter((m) => m.shipmentId === id && m.invoice).length;
+    const number = `INV-${id}-${String(issued + 1).padStart(2, "0")}`;
+    const amountDue = adj ? adj.settlementAmount : terms.invoiceAmount;
+    return addMessage({
+      shipmentId: id,
+      at: now(),
+      authorRole: r,
+      authorName: r,
+      body: text || `Invoice ${number}: ${usd(amountDue)} due`,
+      invoice: {
+        number,
+        issuedAt: now(),
+        shipmentId: id,
+        title: s.title,
+        seller: s.supplier,
+        buyer: s.buyer,
+        itemDescription: terms.itemDescription,
+        quantity: terms.quantity,
+        unitPrice: terms.unitPrice,
+        subtotal: terms.invoiceAmount,
+        final: adj !== null,
+        credit: adj ? adj.credit : null,
+        amountDue,
+        status: s.status,
+        termsHash: s.agreement.termsHash,
+      },
+    });
+  },
+
   devReset: async () => {
     cache = structuredClone(MOCK_SEED);
     save();
+    messageCache = [];
+    saveMessages();
     return { shipments: cache.map((s) => s.id) };
   },
 };

@@ -215,6 +215,45 @@ export type Verification = {
   verifiedAt: IsoDateTime;
 };
 
+/** An invoice as the manufacturer sent it in the chat. Every number comes from the shipment. */
+export type Invoice = {
+  number: string;
+  issuedAt: IsoDateTime;
+  shipmentId: string;
+  title: string;
+  seller: string;
+  buyer: string;
+  itemDescription: string;
+  quantity: number;
+  unitPrice: Money;
+  /** The agreed invoice amount, quantity × unit price. */
+  subtotal: Money;
+  /** Settled (Accepted or Resolved): `credit` is the defect credit and `amountDue` the
+   * settlement amount. Before that there's no credit yet and `amountDue` is the subtotal. */
+  final: boolean;
+  credit: Money | null;
+  amountDue: Money;
+  status: Status;
+  termsHash: Sha256;
+};
+
+/** One message in a shipment's Buyer ↔ Supplier thread. Not part of the audit chain. */
+export type ChatMessage = {
+  id: string;
+  shipmentId: string;
+  at: IsoDateTime;
+  authorRole: Role;
+  authorName: string;
+  body: string;
+  /** Sent by the signed-in account. */
+  mine: boolean;
+  /** Set on an invoice message: the invoice as issued, never updated afterwards. */
+  invoice: Invoice | null;
+};
+
+/** Longest message the API accepts, after trimming. */
+export const MAX_MESSAGE_LENGTH = 2000;
+
 export type ResetResult = { shipments: string[] };
 
 export type NewShipment = {
@@ -243,6 +282,11 @@ export interface Api {
   /** Send whatever of the history isn't on Solana yet (retries failed anchoring). */
   anchor(id: string): Promise<ShipmentDetail>;
   verifyAudit(id: string): Promise<Verification>;
+  listMessages(id: string): Promise<ChatMessage[]>;
+  /** Buyer or Supplier only; a Reviewer gets 403. */
+  sendMessage(id: string, body: string): Promise<ChatMessage>;
+  /** Supplier only, once both parties approved the terms (409 before). */
+  sendInvoice(id: string, note?: string): Promise<ChatMessage>;
   devReset(): Promise<ResetResult>;
 }
 
@@ -355,5 +399,9 @@ export const httpApi: Api = {
   resolve: (id) => request("POST", `/shipments/${enc(id)}/resolve`),
   anchor: (id) => request("POST", `/shipments/${enc(id)}/chain/anchor`),
   verifyAudit: (id) => request("POST", `/shipments/${enc(id)}/audit/verify`),
+  listMessages: (id) => request("GET", `/shipments/${enc(id)}/messages`),
+  sendMessage: (id, body) => request("POST", `/shipments/${enc(id)}/messages`, { json: { body } }),
+  sendInvoice: (id, note) =>
+    request("POST", `/shipments/${enc(id)}/messages/invoice`, { json: note ? { note } : {} }),
   devReset: () => request("POST", "/dev/reset"),
 };

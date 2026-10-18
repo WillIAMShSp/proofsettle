@@ -12,6 +12,7 @@ amount or a status; bodies that exist reject unknown fields with 422, and routes
 body ignore whatever is sent.
 """
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -20,7 +21,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Re
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import AwareDatetime, StringConstraints, ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app import operations as ops
@@ -33,11 +34,11 @@ from app.config import settings
 from app.db import get_db
 from app.findings import Finding, ReviewOverride
 from app.inspection import InspectionProvider, MockProvider
-from app.models import AdjustmentRow, AuditEvent, ChainStatus, Evidence, FindingRow, Shipment
+from app.models import AdjustmentRow, AuditEvent, ChainStatus, ChatMessage, Evidence, FindingRow, Shipment
 from app.money import Money
 from app.schemas import CamelModel
 from app.seed_db import BUYER, reset_and_seed
-from app.settlement import Adjustment, compute_adjustment
+from app.settlement import Adjustment, compute_adjustment, usd
 from app.terms import AgreementTerms
 from app.workflow import Actor, AdjustmentAcceptance, Status, can_accept, can_dispute
 
@@ -86,6 +87,18 @@ class DisputeIn(CamelModel):
 
 class ReviewIn(CamelModel):
     decision: ReviewOverride
+
+
+MessageBody = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+class MessageIn(CamelModel):
+    body: MessageBody
+
+
+class InvoiceIn(CamelModel):
+    # An optional covering note; the invoice's numbers always come from the shipment.
+    note: MessageBody | None = None
 
 
 # --- Response shapes ----------------------------------------------------------------------
@@ -179,6 +192,41 @@ class AuditOut(CamelModel):
     checked: int
     events: tuple[EventOut, ...]
     checks: tuple[EventCheck, ...]
+
+
+class InvoiceOut(CamelModel):
+    """An invoice as issued in the chat. Every number is computed from the shipment."""
+
+    number: str  # "INV-PS-1044-01"
+    issued_at: AwareDatetime
+    shipment_id: str
+    title: str
+    seller: str  # the manufacturer (shipment supplier)
+    buyer: str
+    item_description: str
+    quantity: int
+    unit_price: Money
+    subtotal: Money  # the agreed invoice amount, quantity × unit price
+    # True once the adjustment is settled (Accepted or Resolved): `credit` is then the
+    # defect credit and `amount_due` the settlement amount. Before that there is no credit
+    # yet and the full subtotal is shown.
+    final: bool
+    credit: Money | None
+    amount_due: Money
+    status: Status  # the shipment's status when issued
+    terms_hash: str  # the agreement both parties approved (and that is anchored on Solana)
+
+
+class MessageOut(CamelModel):
+    id: str
+    shipment_id: str
+    at: AwareDatetime
+    author_role: Actor
+    author_name: str
+    body: str
+    # Written by the caller's account, so the UI can put it on the right-hand side.
+    mine: bool
+    invoice: InvoiceOut | None
 
 
 # --- Builders -----------------------------------------------------------------------------
@@ -298,6 +346,63 @@ def _detail(s: Shipment, role: Actor) -> ShipmentDetail:
     )
 
 
+def _message(m: ChatMessage, caller: Caller) -> MessageOut:
+    # A dev login has no account, so there a message is "mine" when this role sent it.
+    mine = m.author_user_id == caller.user_id if caller.user_id else m.author_role is caller.actor
+    return MessageOut(
+        id=m.public_id,
+        shipment_id=m.shipment_id,
+        at=m.at,
+        author_role=m.author_role,
+        author_name=m.author_name,
+        body=m.body,
+        mine=mine,
+        # Parsed from JSON text, so stored money is read exactly (app.money refuses floats).
+        invoice=InvoiceOut.model_validate_json(json.dumps(m.invoice)) if m.invoice else None,
+    )
+
+
+_SETTLED = (Status.ACCEPTED, Status.RESOLVED)
+
+
+def _invoice(db: Session, s: Shipment, now: datetime) -> InvoiceOut:
+    """The invoice for this shipment right now; 409 before both parties approved the terms."""
+    if s.agreement is None or s.status is Status.DRAFT:
+        raise HTTPException(409, "Both parties must approve the terms before an invoice can be sent")
+    terms = s.agreement.parsed_terms()
+    live = (
+        compute_adjustment(terms, tuple(f.to_finding() for f in s.findings))
+        if s.adjustment and s.status in _SETTLED
+        else None
+    )
+    issued = db.scalar(
+        select(func.count())
+        .select_from(ChatMessage)
+        .where(ChatMessage.shipment_id == s.id, ChatMessage.invoice.is_not(None))
+    )
+    return InvoiceOut(
+        number=f"INV-{s.id}-{(issued or 0) + 1:02d}",
+        issued_at=now,
+        shipment_id=s.id,
+        title=s.title,
+        seller=s.supplier,
+        buyer=s.buyer,
+        item_description=terms.item_description,
+        quantity=terms.quantity,
+        unit_price=terms.unit_price,
+        subtotal=terms.invoice_amount,
+        final=live is not None,
+        credit=live.credit if live else None,
+        amount_due=live.settlement_amount if live else terms.invoice_amount,
+        status=s.status,
+        terms_hash=s.agreement.terms_hash,
+    )
+
+
+def _chat_author(caller: Caller) -> str:
+    return (caller.name or caller.email or caller.actor.value)[:200]  # author_name is 200 wide
+
+
 def _chain_out(s: Shipment) -> ChainOut | None:
     chain = get_chain()
     if chain is None:
@@ -377,6 +482,13 @@ def get_audit(shipment_id: str, db: Db, role: Role) -> AuditOut:
         events=tuple(_event(e) for e in s.events),
         checks=result.events,
     )
+
+
+@router.get("/shipments/{shipment_id}/messages", dependencies=Visible)
+def list_messages(shipment_id: str, db: Db, caller: CallerDep) -> list[MessageOut]:
+    """The shipment's Buyer ↔ Supplier thread, oldest first."""
+    rows = db.scalars(select(ChatMessage).where(ChatMessage.shipment_id == shipment_id).order_by(ChatMessage.id))
+    return [_message(m, caller) for m in rows]
 
 
 @router.get("/evidence/{evidence_id}/file")
@@ -495,6 +607,52 @@ def review_finding(finding_id: str, body: ReviewIn, db: Db, role: Role, tasks: B
 def resolve(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.resolve_dispute(_load(db, shipment_id, lock=True), role, _now())
     return _committed(db, shipment_id, role, tasks)
+
+
+@router.post("/shipments/{shipment_id}/messages", status_code=201, dependencies=Visible)
+def send_message(shipment_id: str, body: MessageIn, db: Db, caller: CallerDep) -> MessageOut:
+    """Buyer and Supplier talk; a Reviewer reads the thread for context but stays neutral.
+
+    Not settlement state: no status, amount, audit event or Solana transaction changes.
+    """
+    if caller.actor not in (Actor.BUYER, Actor.SUPPLIER):
+        raise HTTPException(403, "Only the Buyer and Supplier can send messages")
+    m = ChatMessage(
+        shipment_id=shipment_id,
+        author_role=caller.actor,
+        author_user_id=caller.user_id,
+        author_name=_chat_author(caller),
+        body=body.body,
+        at=_now(),
+    )
+    db.add(m)
+    db.commit()
+    return _message(m, caller)
+
+
+@router.post("/shipments/{shipment_id}/messages/invoice", status_code=201, dependencies=Visible)
+def send_invoice(shipment_id: str, db: Db, caller: CallerDep, body: InvoiceIn | None = None) -> MessageOut:
+    """The manufacturer sends the buyer an invoice in the chat. Supplier only.
+
+    Its numbers come from the approved terms and, once settled, the adjustment; nobody
+    enters an amount. Like any message it changes no status, amount or audit event.
+    """
+    if caller.actor is not Actor.SUPPLIER:
+        raise HTTPException(403, "Only the Supplier (manufacturer) can send an invoice")
+    now = _now()
+    invoice = _invoice(db, _load(db, shipment_id), now)
+    m = ChatMessage(
+        shipment_id=shipment_id,
+        author_role=caller.actor,
+        author_user_id=caller.user_id,
+        author_name=_chat_author(caller),
+        body=(body.note if body and body.note else f"Invoice {invoice.number}: {usd(invoice.amount_due)} due"),
+        at=now,
+        invoice=invoice.model_dump(mode="json"),
+    )
+    db.add(m)
+    db.commit()
+    return _message(m, caller)
 
 
 @router.post("/shipments/{shipment_id}/chain/anchor", dependencies=Visible)
