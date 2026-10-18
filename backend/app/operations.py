@@ -275,6 +275,14 @@ def add_evidence(s: Shipment, actor: Actor, uploads: list[Upload], store: Eviden
     return written
 
 
+def check_inspection(s: Shipment, actor: Actor) -> None:
+    """Raise unless `actor` may inspect `s` now (also checked before a background run starts)."""
+    if s.status is not Status.INSPECTION:
+        raise PreconditionFailed(f"Inspection can only run while Inspection, not {s.status}")
+    if actor not in PARTIES:
+        raise NotPermitted(f"{actor} cannot run an inspection")
+
+
 def run_inspection(
     s: Shipment, actor: Actor, provider: InspectionProvider, store: EvidenceStore, now: datetime
 ) -> None:
@@ -283,10 +291,7 @@ def run_inspection(
     The photos are re-hashed first and the inspection is refused if any file changed. The
     proposed adjustment is compute_adjustment's output; the provider has no say in it.
     """
-    if s.status is not Status.INSPECTION:
-        raise PreconditionFailed(f"Inspection can only run while Inspection, not {s.status}")
-    if actor not in PARTIES:
-        raise NotPermitted(f"{actor} cannot run an inspection")
+    check_inspection(s, actor)
     terms = _terms(s)
 
     photos: dict[EvidenceKind, list[Photo]] = {EvidenceKind.DISPATCH: [], EvidenceKind.RECEIPT: []}

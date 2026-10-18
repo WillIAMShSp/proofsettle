@@ -24,6 +24,7 @@ from pydantic import AwareDatetime, StringConstraints, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
+from app import jobs
 from app import operations as ops
 from app.access import can_see
 from app.audit import ChainVerification, EventCheck, verify_chain
@@ -179,6 +180,14 @@ class ChainOut(CamelModel):
     explorer_cluster: str
 
 
+class InspectionRunOut(CamelModel):
+    """A background AI inspection (app.jobs). Absent when none is running or failed."""
+
+    state: Literal["running", "failed"]
+    error: str | None
+    started_at: AwareDatetime
+
+
 class ShipmentDetail(ShipmentSummary):
     dispute_reason: str | None
     agreement: AgreementOut | None
@@ -188,6 +197,7 @@ class ShipmentDetail(ShipmentSummary):
     actions: Actions
     events: tuple[EventOut, ...]
     chain: ChainOut | None
+    inspection_run: InspectionRunOut | None
 
 
 class AuditOut(CamelModel):
@@ -327,6 +337,18 @@ def _load(db: Session, shipment_id: str, *, lock: bool = False) -> Shipment:
     return s
 
 
+def _inspection_run(s: Shipment) -> InspectionRunOut | None:
+    if s.inspection_state not in (jobs.RUNNING, jobs.FAILED) or s.inspection_started_at is None:
+        return None
+    if s.inspection_state == jobs.RUNNING and not jobs.is_running(s, _now()):
+        return InspectionRunOut(
+            state="failed",
+            error="The inspection stopped without finishing; run it again",
+            started_at=s.inspection_started_at,
+        )
+    return InspectionRunOut(state=s.inspection_state, error=s.inspection_error, started_at=s.inspection_started_at)
+
+
 def _detail(s: Shipment, role: Actor) -> ShipmentDetail:
     findings = tuple(f.to_finding() for f in s.findings)
     live = compute_adjustment(s.agreement.parsed_terms(), findings) if s.adjustment and s.agreement else None
@@ -347,6 +369,7 @@ def _detail(s: Shipment, role: Actor) -> ShipmentDetail:
         actions=_actions(s, role, live),
         events=tuple(_event(e) for e in s.events),
         chain=_chain_out(s),
+        inspection_run=_inspection_run(s),
     )
 
 
@@ -575,12 +598,22 @@ def upload_evidence(
         raise
 
 
-@router.post("/shipments/{shipment_id}/inspect", dependencies=Visible)
+@router.post("/shipments/{shipment_id}/inspect", status_code=202, dependencies=Visible)
 def inspect(
     shipment_id: str, db: Db, role: Role, store: Store, provider: Provider, tasks: BackgroundTasks
 ) -> ShipmentDetail:
-    ops.run_inspection(_load(db, shipment_id, lock=True), role, provider, store, _now())
-    return _committed(db, shipment_id, role, tasks)
+    """Start the AI inspection in the background (app.jobs) and answer at once, with
+    `inspectionRun.state = "running"`. Poll GET /shipments/{id} for the outcome."""
+    s = _load(db, shipment_id, lock=True)
+    ops.check_inspection(s, role)
+    now = _now()
+    if jobs.is_running(s, now):
+        raise HTTPException(409, "An inspection is already running for this shipment")
+    jobs.mark_running(s, now)
+    db.commit()
+    sessions = sessionmaker(bind=db.get_bind(), autoflush=False, expire_on_commit=False)
+    tasks.add_task(jobs.run_inspection_job, sessions, shipment_id, role, provider, store)
+    return _detail(_load(db, shipment_id), role)
 
 
 @router.post("/shipments/{shipment_id}/accept", dependencies=Visible)

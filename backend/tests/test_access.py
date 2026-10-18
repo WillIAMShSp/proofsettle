@@ -89,7 +89,8 @@ def test_the_recipient_runs_the_manufacturer_steps(client):
     ok(client.post(f"/shipments/{id}/agreement/approve", headers=RECIPIENT))
     ok(client.post(f"/shipments/{id}/evidence", headers=RECIPIENT, files=photos(DISPATCH, 4)))
     ok(client.post(f"/shipments/{id}/evidence", headers=OWNER, files=photos(RECEIPT, 4)))
-    d = ok(client.post(f"/shipments/{id}/inspect", headers=OWNER))
+    ok(client.post(f"/shipments/{id}/inspect", headers=OWNER), 202)
+    d = ok(client.get(f"/shipments/{id}", headers=OWNER))
     finding = d["inspection"]["findings"][0]["id"]
     body = {"decision": "confirmed"}
     assert client.post(f"/findings/{finding}/review", json=body, headers=OTHER_BUYER).status_code == 404

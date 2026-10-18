@@ -94,6 +94,11 @@ class Shipment(Base):
     # Who may see the shipment (app.access). Null on the demo seed, which everyone sees.
     created_by: Mapped[str | None] = mapped_column(String(64))  # Supabase user id
     recipient_email: Mapped[str | None] = mapped_column(String(320), index=True)  # lowercased
+    # A background AI inspection (app.jobs): "running" while it works, "failed" with the
+    # reason if it couldn't finish, null otherwise. Bookkeeping only: not hashed or anchored.
+    inspection_state: Mapped[str | None] = mapped_column(String(16))
+    inspection_error: Mapped[str | None] = mapped_column(Text)
+    inspection_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
     agreement: Mapped["Agreement | None"] = relationship(back_populates="shipment", uselist=False)
     # Ids are sequential ("ev_09", "ev_10", ..., "ev_100"): shorter first, then by text.

@@ -23,6 +23,7 @@ DETAIL_KEYS = SUMMARY_KEYS | {
     "actions",
     "events",
     "chain",
+    "inspectionRun",
 }
 AGREEMENT_KEYS = {"terms", "buyerApproved", "supplierApproved", "termsHash"}
 EVIDENCE_KEYS = {"id", "kind", "url", "sha256", "uploadedBy", "at", "verified"}

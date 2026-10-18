@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # Seconds to wait for one inspection. One with 2 photos took 87 s on gemini-3.8-flash,
     # so a full set of photos needs minutes, not seconds.
     gemini_timeout_s: float = 300.0
+    # A background inspection still "running" after this long is presumed dead (its process
+    # stopped) and may be started again. Longer than any real run, Gemini's timeout included.
+    inspection_stale_s: float = 900.0
 
     # --- Solana anchoring (app/chain). Off unless the RPC URL and all four keypairs are set.
     # JSON-RPC endpoint, e.g. https://api.devnet.solana.com or http://127.0.0.1:8899.

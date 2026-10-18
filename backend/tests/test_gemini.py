@@ -15,7 +15,7 @@ from app.inspection import InspectionFailed, InspectionRequest, MockProvider, Ph
 from app.main import app
 from app.routes import inspection_provider
 from app.seed import PS_1042_TERMS
-from tests.test_writes import BUYER, ok, to_status
+from tests.test_writes import BUYER, failed_inspection, inspected, ok, to_status
 
 KEY = "test-gemini-key"
 
@@ -252,13 +252,13 @@ def test_gemini_findings_become_the_engines_proposed_adjustment(client, gemini):
             }
         )
     )
-    d = ok(client.post(f"/shipments/{id}/inspect", headers=BUYER))
+    d = inspected(client, id)
 
     assert len(seen) == 1
     sent = [p["inline_data"] for p in json.loads(seen[0].data)["contents"][0]["parts"] if "inline_data" in p]
     assert len(sent) == 8  # 4 dispatch + 4 receipt photos, the real uploaded bytes
 
-    assert d["status"] == "Proposed"
+    assert d["status"] == "Proposed" and d["inspectionRun"] is None
     assert [f["unitRef"] for f in d["inspection"]["findings"]] == ["Component #017", "Component #042", "Component #050"]
     adj = d["adjustment"]
     # The engine, not Gemini, decides: 1 counted unit × $100 per unit (PS-1042's terms).
@@ -283,32 +283,82 @@ def test_gemini_citing_a_photo_it_was_not_given_stores_nothing(client, gemini):
         "presentInDispatch": False,
     }
     gemini(gemini_answer({"findings": [finding]}))
-    res = client.post(f"/shipments/{id}/inspect", headers=BUYER)
-    assert res.status_code == 502
-    assert "unknown evidence" in res.json()["detail"]
-    d = ok(client.get(f"/shipments/{id}", headers=BUYER))
-    assert d["status"] == "Inspection" and d["inspection"] is None
+    d = failed_inspection(client, id)
+    assert "unknown evidence ev_999" in d["inspectionRun"]["error"]
 
 
 def test_gemini_output_off_the_schema_stores_nothing(client, gemini):
     id = to_status(client, "Inspection")
     gemini(gemini_answer({"findings": [{"unitRef": "x", "amount": 500}]}))  # no amount field exists
-    res = client.post(f"/shipments/{id}/inspect", headers=BUYER)
-    assert res.status_code == 502
-    assert ok(client.get(f"/shipments/{id}", headers=BUYER))["status"] == "Inspection"
+    d = failed_inspection(client, id)
+    assert "failed validation" in d["inspectionRun"]["error"]
 
 
 def test_a_gemini_failure_can_be_retried(client, gemini):
     id = to_status(client, "Inspection")
     gemini(http_error(503))
-    res = client.post(f"/shipments/{id}/inspect", headers=BUYER)
-    assert res.status_code == 502 and "unavailable" in res.json()["detail"]
+    d = failed_inspection(client, id)
+    assert "unavailable" in d["inspectionRun"]["error"]
     gemini(gemini_answer({"findings": []}))
-    d = ok(client.post(f"/shipments/{id}/inspect", headers=BUYER))
-    assert d["status"] == "Proposed" and d["adjustment"]["credit"] == 0
+    d = inspected(client, id)  # a failed run can simply be started again
+    assert d["status"] == "Proposed" and d["adjustment"]["credit"] == 0 and d["inspectionRun"] is None
 
 
 def test_a_slow_gemini_times_out_with_a_clear_message(monkeypatch):
     fake_gemini(monkeypatch, TimeoutError("timed out"))
     with pytest.raises(InspectionFailed, match="didn't finish within 300 s"):
         GeminiProvider(KEY, "m").inspect(request_for([], ["ev_05"]))
+
+
+# --- The background job ------------------------------------------------------------------
+
+
+def test_a_second_start_while_one_is_running_is_refused(client, db):
+    from datetime import UTC, datetime
+
+    from app.models import Shipment
+
+    id = to_status(client, "Inspection")
+    s = db.get(Shipment, id)
+    s.inspection_state, s.inspection_started_at = "running", datetime.now(UTC)
+    db.commit()
+    res = client.post(f"/shipments/{id}/inspect", headers=BUYER)
+    assert res.status_code == 409 and "already running" in res.json()["detail"]
+    assert ok(client.get(f"/shipments/{id}", headers=BUYER))["inspectionRun"]["state"] == "running"
+
+
+def test_a_run_that_died_can_be_started_again(client, db, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import Shipment
+
+    id = to_status(client, "Inspection")
+    s = db.get(Shipment, id)
+    s.inspection_state = "running"
+    s.inspection_started_at = datetime.now(UTC) - timedelta(seconds=settings.inspection_stale_s + 1)
+    db.commit()
+    run = ok(client.get(f"/shipments/{id}", headers=BUYER))["inspectionRun"]
+    assert run["state"] == "failed" and "stopped without finishing" in run["error"]
+    assert inspected(client, id)["status"] == "Proposed"  # the mock provider
+
+
+def test_the_start_is_checked_before_anything_runs(client):
+    assert client.post("/shipments/PS-1038/inspect", headers=BUYER).status_code == 409  # In Transit
+    id = to_status(client, "Inspection")
+    assert client.post(f"/shipments/{id}/inspect", headers={"X-Demo-Role": "Reviewer"}).status_code == 403
+    assert ok(client.get(f"/shipments/{id}", headers=BUYER))["inspectionRun"] is None
+
+
+def test_a_crashing_provider_is_recorded_not_raised(client):
+    from app.main import app as fastapi_app
+
+    class Crashes:
+        name = "crashes"
+
+        def inspect(self, request):
+            raise RuntimeError("boom")
+
+    id = to_status(client, "Inspection")
+    fastapi_app.dependency_overrides[inspection_provider] = Crashes
+    d = failed_inspection(client, id)
+    assert "Inspection provider crashes failed" in d["inspectionRun"]["error"]

@@ -37,6 +37,25 @@ def verified_chain(client, id):
     return client.get(f"/shipments/{id}/audit", headers=BUYER).json()["verified"]
 
 
+def inspected(client, id, role=BUYER):
+    """Start the background inspection (202, running) and return the detail after it ran.
+
+    TestClient runs background tasks before returning, so the outcome is there right away.
+    """
+    started = ok(post(client, f"/shipments/{id}/inspect", role), 202)
+    assert started["status"] == "Inspection"
+    assert started["inspectionRun"]["state"] == "running"
+    return ok(client.get(f"/shipments/{id}", headers=role))
+
+
+def failed_inspection(client, id):
+    """Start an inspection that will fail; return the detail, which records why."""
+    d = inspected(client, id)
+    assert (d["status"], d["inspection"], d["adjustment"]) == ("Inspection", None, None)
+    assert d["inspectionRun"]["state"] == "failed"
+    return d
+
+
 def create(client):
     return ok(post(client, "/shipments", BUYER, json=NEW), 201)
 
@@ -96,8 +115,8 @@ def test_case_a_full_workflow(client, seeded):
         assert (files / f"{ev['id']}.jpg").read_bytes() == expected
         assert client.get(ev["url"]).content == expected
 
-    d = ok(post(client, f"/shipments/{id}/inspect", BUYER))
-    assert d["status"] == "Proposed"
+    d = inspected(client, id)
+    assert d["status"] == "Proposed" and d["inspectionRun"] is None
     receipt_ids = [ev["id"] for ev in d["evidence"] if ev["kind"] == "receipt"]
     findings = d["inspection"]["findings"]
     assert [f["id"] for f in findings] == ["fnd_10", "fnd_11", "fnd_12", "fnd_13"]
@@ -241,10 +260,8 @@ def test_inspection_output_with_an_amount_is_refused(client):
             )
 
     app.dependency_overrides[inspection_provider] = Sneaky
-    res = post(client, f"/shipments/{id}/inspect", BUYER)
-    assert res.status_code == 502
-    d = client.get(f"/shipments/{id}", headers=BUYER).json()
-    assert (d["status"], d["inspection"], d["adjustment"]) == ("Inspection", None, None)
+    d = failed_inspection(client, id)
+    assert "failed validation" in d["inspectionRun"]["error"]
 
 
 def test_inspection_output_citing_unknown_evidence_is_refused(client):
@@ -260,8 +277,8 @@ def test_inspection_output_citing_unknown_evidence_is_refused(client):
             )
 
     app.dependency_overrides[inspection_provider] = Unknown
-    assert post(client, f"/shipments/{id}/inspect", BUYER).status_code == 502
-    assert client.get(f"/shipments/{id}", headers=BUYER).json()["status"] == "Inspection"
+    d = failed_inspection(client, id)
+    assert "unknown evidence ev_01" in d["inspectionRun"]["error"]
 
 
 # --- verify -------------------------------------------------------------------------------
@@ -313,7 +330,8 @@ def test_inspection_refuses_tampered_photos(client, seeded):
     id = to_status(client, "Inspection")
     receipt = [ev for ev in client.get(f"/shipments/{id}", headers=BUYER).json()["evidence"] if ev["kind"] == "receipt"]
     (seeded[1] / f"{receipt[0]['id']}.jpg").write_bytes(b"\xff\xd8\xff other")
-    assert post(client, f"/shipments/{id}/inspect", BUYER).status_code == 409
+    d = failed_inspection(client, id)
+    assert "no longer matches its SHA-256" in d["inspectionRun"]["error"]
 
 
 # --- roles, states, uploads ---------------------------------------------------------------
