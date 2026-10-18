@@ -10,23 +10,28 @@ Expect to fix a small compile error or two on the first `anchor build`.
 ## Layout
 
 ```
+Anchor.toml, Cargo.toml, rust-toolchain.toml   Anchor workspace root
 programs/proofsettle/
   Cargo.toml
   src/lib.rs      instructions + account contexts
   src/state.rs    Shipment, Evidence, enums
   src/events.rs   audit events
   src/errors.rs   error codes
-tests/proofsettle.ts   demo Case A (accepted), Case B (disputed), auth guards
+tests/proofsettle.ts   demo Case A (accepted), Case B (disputed), auth guards, verify_evidence
+tests/package.json     test-only deps (kept apart from the web app's package.json)
 ```
 
 ## Setup (Anchor 1.2.x)
 
+The Anchor workspace lives in this repo next to the web app (`Anchor.toml`, `Cargo.toml`,
+`rust-toolchain.toml` at the root). The program tests have their own `tests/package.json` so the
+web app's `package.json` / `bun.lock` (synced with Lovable) are not touched. `target/` and `.anchor/`
+are git-ignored and excluded from ESLint/Prettier.
+
 ```bash
 avm install 1.2.1 && avm use 1.2.1
-anchor init proofsettle --test-template mocha   # scaffolds Anchor.toml, package.json, tsconfig
-# copy programs/proofsettle/* and tests/proofsettle.ts over the scaffold
-npm i @anchor-lang/core @solana/web3.js chai      # if the template didn't already add them
-anchor keys sync     # replaces the placeholder program ID in lib.rs
+(cd tests && npm install)   # mocha, chai, @anchor-lang/core, @solana/web3.js
+anchor keys sync            # replaces the placeholder program ID in lib.rs and Anchor.toml
 anchor build
 anchor test
 ```

@@ -42,7 +42,7 @@ describe("proofsettle", () => {
   async function expectFail(promise: Promise<unknown>, errorName: string) {
     try {
       await promise;
-    } catch (e: any) {
+    } catch (e: unknown) {
       assert.include(String(e), errorName);
       return;
     }
@@ -243,5 +243,24 @@ describe("proofsettle", () => {
 
     assert.equal(onChain, Buffer.from(sha256(original)).toString("hex"));
     assert.notEqual(onChain, Buffer.from(sha256(Buffer.from("dispatch-photo-edited"))).toString("hex"));
+  });
+
+  it("verify_evidence reports whether a file hash matches the record", async () => {
+    const d = await newAgreedDeal();
+    const original = Buffer.from("dispatch-photo-original");
+    const evidence = await recordEvidence(d, d.supplier, { dispatch: {} }, original);
+
+    const check = async (bytes: Buffer) => {
+      const { events } = await program.methods
+        .verifyEvidence(sha256(bytes))
+        .accountsPartial({ shipment: d.shipment, evidence })
+        .simulate();
+      const ev = events.find((e) => e.name === "evidenceVerified");
+      assert.exists(ev, "EvidenceVerified event not emitted");
+      return ev!.data.matches as boolean;
+    };
+
+    assert.isTrue(await check(original));
+    assert.isFalse(await check(Buffer.from("dispatch-photo-edited")));
   });
 });
