@@ -3,7 +3,10 @@
 A request carries `Authorization: Bearer <supabase access token>`. We ask Supabase Auth
 who that token is, then read `public.profiles.role` (Buyer, Supplier or Reviewer): with SQL
 when our database is Supabase Postgres, otherwise through Supabase's REST API as that user.
-`X-Demo-Role` is not consulted. Tests replace `current_actor` and never reach this code.
+`X-Demo-Role` is not consulted. Tests replace `current_caller` and never reach this code.
+
+`current_caller` is the role plus who the caller is (Supabase user id and email), which
+app.access uses to decide which shipments they can see. `current_actor` is just the role.
 
 Local dev only: with `PROOFSETTLE_DEV_AUTH=true`, a request without a bearer token may name
 its role in `X-Dev-Role` instead. Anyone who can reach the server can then act as any role,
@@ -13,6 +16,7 @@ so never turn it on for a deployed backend.
 import json
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
@@ -32,7 +36,7 @@ ROLES = {
     "Reviewer": Actor.REVIEWER,
 }
 
-_PROFILE_SQL = text("SELECT CAST(role AS text) AS role FROM public.profiles WHERE id = :id")
+_PROFILE_SQL = text("SELECT CAST(role AS text) AS role, name FROM public.profiles WHERE id = :id")
 
 
 def actor_from_role(value: object) -> Actor:
@@ -77,8 +81,32 @@ def _supabase_get(path: str, token: str) -> object:
         raise HTTPException(503, "Could not reach Supabase auth") from exc
 
 
-def supabase_user_id(token: str) -> str:
-    """The Auth user id (`sub`) for a live Supabase access token."""
+@dataclass(frozen=True)
+class Profile:
+    """The caller's row in public.profiles."""
+
+    actor: Actor
+    name: str | None
+
+
+def _profile(role: object, name: object) -> Profile:
+    clean = name.strip() if isinstance(name, str) else ""
+    return Profile(actor_from_role(role), clean[:200] or None)
+
+
+@dataclass(frozen=True)
+class Caller:
+    actor: Actor
+    # The Supabase Auth user, and their email lowercased. Both None for a dev login, which
+    # has a role but no identity.
+    user_id: str | None = None
+    email: str | None = None
+    # public.profiles.name, shown as the buyer of shipments this account creates.
+    name: str | None = None
+
+
+def supabase_user(token: str) -> tuple[str, str | None]:
+    """The Auth user id (`sub`) and lowercased email for a live Supabase access token."""
     try:
         payload = _supabase_get("/auth/v1/user", token)
     except urllib.error.HTTPError as exc:
@@ -90,11 +118,12 @@ def supabase_user_id(token: str) -> str:
         UUID(user_id)
     except ValueError as exc:
         raise HTTPException(401, "Invalid or expired session") from exc
-    return user_id
+    email = payload.get("email")
+    return user_id, email.strip().lower() if isinstance(email, str) and email.strip() else None
 
 
-def profile_role(db: Session, user_id: str) -> Actor:
-    """Role for this auth user from public.profiles. Workflow tables are not in public."""
+def read_profile(db: Session, user_id: str) -> Profile:
+    """This auth user's public.profiles row. Workflow tables are not in public."""
     try:
         row = db.execute(_PROFILE_SQL, {"id": user_id}).one_or_none()
     except SQLAlchemyError as exc:
@@ -102,36 +131,43 @@ def profile_role(db: Session, user_id: str) -> Actor:
         raise HTTPException(503, "Could not read the user profile") from exc
     if row is None:
         raise HTTPException(403, "No ProofSettle profile for this account")
-    return actor_from_role(row[0])
+    return _profile(row[0], row[1])
 
 
-def supabase_profile_role(token: str, user_id: str) -> Actor:
-    """Role from public.profiles via Supabase's REST API, as the user (RLS: own row).
+def supabase_profile(token: str, user_id: str) -> Profile:
+    """The public.profiles row via Supabase's REST API, as the user (RLS: own row).
 
     For a local SQLite database, which has no `public.profiles` to query.
     """
     try:
-        rows = _supabase_get(f"/rest/v1/profiles?select=role&id=eq.{user_id}", token)
+        rows = _supabase_get(f"/rest/v1/profiles?select=role,name&id=eq.{user_id}", token)
     except urllib.error.HTTPError as exc:
         raise HTTPException(503, "Could not read the user profile") from exc
     if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
         raise HTTPException(403, "No ProofSettle profile for this account")
-    return actor_from_role(rows[0].get("role"))
+    return _profile(rows[0].get("role"), rows[0].get("name"))
 
 
 _Db = Annotated[Session, Depends(get_db)]
 
 
-def current_actor(
+def current_caller(
     db: _Db,
     authorization: Annotated[str | None, Header()] = None,
     x_dev_role: Annotated[str | None, Header()] = None,
-) -> Actor:
+) -> Caller:
     if settings.dev_auth and authorization is None and x_dev_role is not None:
-        return actor_from_role(x_dev_role)
+        return Caller(actor_from_role(x_dev_role))
     token = bearer_token(authorization)
-    user_id = supabase_user_id(token)
+    user_id, email = supabase_user(token)
     # On Supabase Postgres the profile is in the same database; locally it is only in Supabase.
     if db.get_bind().dialect.name == "postgresql":
-        return profile_role(db, user_id)
-    return supabase_profile_role(token, user_id)
+        profile = read_profile(db, user_id)
+    else:
+        profile = supabase_profile(token, user_id)
+    return Caller(profile.actor, user_id, email, profile.name)
+
+
+def current_actor(caller: Annotated[Caller, Depends(current_caller)]) -> Actor:
+    # FastAPI caches current_caller per request, so routes using both ask Supabase once.
+    return caller.actor

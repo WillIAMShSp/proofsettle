@@ -421,3 +421,22 @@ def test_dev_reset_reloads_the_seed(client, monkeypatch, seeded):
     assert ok(client.post("/dev/reset")) == {"shipments": ["PS-1042", "PS-1038", "PS-1031"]}
     assert client.get("/shipments/PS-1042", headers=BUYER).json()["status"] == "Proposed"
     assert sorted(p.name for p in seeded[1].iterdir()) == [f"ev_{n:02d}.jpg" for n in range(1, 21)]
+
+
+def test_create_accepts_amounts_with_cents(client):
+    # The body is parsed as JSON text: 12.07 must be Decimal("12.07"), not a refused float.
+    terms = NEW["terms"] | {"quantity": 7, "unitPrice": 12.07, "invoiceAmount": 84.49}
+    terms["compensation"] = terms["compensation"] | {"amountPerUnit": 0.99, "maxCredit": 84.49}
+    terms["acceptance"] = terms["acceptance"] | {"defectToleranceUnits": 0}
+    d = ok(post(client, "/shipments", BUYER, json=NEW | {"terms": terms}), 201)
+    assert d["amount"] == 84.49
+    assert d["agreement"]["terms"]["unitPrice"] == 12.07
+    assert d["agreement"]["terms"]["compensation"]["amountPerUnit"] == 0.99
+
+
+def test_create_rejects_sub_cent_amounts_and_bad_json(client):
+    terms = NEW["terms"] | {"quantity": 1, "unitPrice": 0.001, "invoiceAmount": 0.001}
+    res = post(client, "/shipments", BUYER, json=NEW | {"terms": terms})
+    assert res.status_code == 422
+    assert all(err["loc"][0] == "body" for err in res.json()["detail"])
+    assert post(client, "/shipments", BUYER, content=b"{not json").status_code == 422

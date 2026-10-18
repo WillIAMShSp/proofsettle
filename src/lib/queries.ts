@@ -17,21 +17,33 @@ import { useStore } from "./store";
 export { USE_MOCK };
 export const api: Api = USE_MOCK ? mockApi : httpApi;
 
-// `actions` in a detail depend on the caller's role, so the role is part of its key.
+// Which shipments the API returns depends on the signed-in account, and a detail's `actions`
+// on its role, so both are part of the keys: one account's data is never shown to another.
+type Account = string | null;
 export const keys = {
-  list: ["shipments"] as const,
-  detail: (id: string, role: Role | null) => ["shipment", id, role] as const,
+  list: (account: Account) => ["shipments", account] as const,
+  detail: (id: string, account: Account, role: Role | null) =>
+    ["shipment", id, account, role] as const,
 };
 
+function useAccount() {
+  const { user, role } = useStore();
+  return { account: user?.id ?? null, role };
+}
+
 export function useShipments() {
-  const { role } = useStore();
-  return useQuery({ queryKey: keys.list, queryFn: api.listShipments, enabled: role !== null });
+  const { account, role } = useAccount();
+  return useQuery({
+    queryKey: keys.list(account),
+    queryFn: api.listShipments,
+    enabled: role !== null,
+  });
 }
 
 export function useShipment(id: string) {
-  const { role } = useStore();
+  const { account, role } = useAccount();
   return useQuery({
-    queryKey: keys.detail(id, role),
+    queryKey: keys.detail(id, account, role),
     queryFn: () => api.getShipment(id),
     enabled: role !== null,
     retry: (count, error) => count < 2 && !(error instanceof ApiError && error.status === 404),
@@ -48,6 +60,7 @@ const toSummary = ({
   supplier,
   amount,
   status,
+  recipientEmail,
 }: ShipmentDetail): ShipmentSummary => ({
   id,
   title,
@@ -55,18 +68,19 @@ const toSummary = ({
   supplier,
   amount,
   status,
+  recipientEmail,
 });
 
 /** Put a write's returned detail into the cache instead of refetching. */
-function applyDetail(qc: QueryClient, detail: ShipmentDetail, role: Role | null) {
-  qc.setQueryData(keys.detail(detail.id, role), detail);
-  qc.setQueryData<ShipmentSummary[]>(keys.list, (list) =>
+function applyDetail(qc: QueryClient, detail: ShipmentDetail, account: Account, role: Role | null) {
+  qc.setQueryData(keys.detail(detail.id, account, role), detail);
+  qc.setQueryData<ShipmentSummary[]>(keys.list(account), (list) =>
     list?.map((s) => (s.id === detail.id ? toSummary(detail) : s)),
   );
-  // Cached copies for other roles have stale `actions`; refetch them when next shown.
+  // Cached copies for other accounts or roles are stale; refetch them when next shown.
   qc.invalidateQueries({
     queryKey: ["shipment", detail.id],
-    predicate: (q) => q.queryKey[2] !== role,
+    predicate: (q) => q.queryKey[2] !== account || q.queryKey[3] !== role,
   });
 }
 
@@ -76,10 +90,23 @@ function applyDetail(qc: QueryClient, detail: ShipmentDetail, role: Role | null)
  */
 export function useShipmentWrite() {
   const qc = useQueryClient();
-  const { role } = useStore();
+  const { account, role } = useAccount();
   return useMutation({
     mutationFn: (call: () => Promise<ShipmentDetail>) => call(),
-    onSuccess: (detail) => applyDetail(qc, detail, role),
+    onSuccess: (detail) => applyDetail(qc, detail, account, role),
+  });
+}
+
+/** Buyer only. The new shipment goes into the detail cache and the list is refetched. */
+export function useCreateShipment() {
+  const qc = useQueryClient();
+  const { account, role } = useAccount();
+  return useMutation({
+    mutationFn: api.createShipment,
+    onSuccess: (detail) => {
+      qc.setQueryData(keys.detail(detail.id, account, role), detail);
+      void qc.invalidateQueries({ queryKey: ["shipments"] });
+    },
   });
 }
 

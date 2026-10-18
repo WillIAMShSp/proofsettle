@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Chip, Notice, PickRole, TopBar, useStore } from "@/lib/store";
+import { Chip, FrozenTag, Notice, PickRole, TopBar, useStore } from "@/lib/store";
+import { isFrozen } from "@/lib/format";
 import { ApiError } from "@/lib/api";
 import { USE_MOCK, useDevReset, useShipments } from "@/lib/queries";
+import { NewShipmentForm } from "@/components/NewShipmentForm";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -20,6 +22,7 @@ function Dashboard() {
   const { role, hydrated } = useStore();
   const list = useShipments();
   const shipments = list.data ?? [];
+  const [creating, setCreating] = useState(false);
   return (
     <div className="min-h-screen">
       <TopBar />
@@ -32,8 +35,23 @@ function Dashboard() {
               {USE_MOCK && <span className="ml-2 text-xs">(offline demo data)</span>}
             </p>
           </div>
-          {role && <ResetDemo />}
+          <div className="flex items-start gap-3">
+            {role === "Buyer" && !creating && (
+              <button
+                onClick={() => setCreating(true)}
+                className="rounded-full bg-sol px-5 py-1.5 text-xs font-medium text-background hover:opacity-90"
+              >
+                New shipment
+              </button>
+            )}
+            {role && <ResetDemo />}
+          </div>
         </div>
+        {role === "Buyer" && creating && (
+          <div className="mt-10">
+            <NewShipmentForm onCancel={() => setCreating(false)} />
+          </div>
+        )}
         <div className="mt-10 space-y-3">
           {hydrated && !role ? (
             <PickRole />
@@ -61,11 +79,15 @@ function Dashboard() {
                   <h3 className="mt-1 text-lg font-medium">{s.title}</h3>
                   <p className="text-sm text-muted-foreground">
                     {s.supplier} → {s.buyer}
+                    {s.recipientEmail && <span> · shared with {s.recipientEmail}</span>}
                   </p>
                 </div>
                 <div className="flex items-center gap-6">
                   <span className="text-lg font-medium">${s.amount.toLocaleString()}</span>
-                  <Chip status={s.status} />
+                  <div className="flex items-center gap-2">
+                    {isFrozen(s.status) && <FrozenTag />}
+                    <Chip status={s.status} />
+                  </div>
                 </div>
               </Link>
             ))

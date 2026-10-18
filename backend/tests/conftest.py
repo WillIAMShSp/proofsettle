@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.auth import current_actor
+from app.auth import Caller, current_caller
 from app.chain import set_chain
 from app.db import get_db, make_engine
 from app.main import app
@@ -17,11 +17,19 @@ from app.seed_db import reset_and_seed
 from app.workflow import Actor
 
 
-def test_actor(x_demo_role: Annotated[str | None, Header()] = None) -> Actor:
-    """Stand-in for Supabase login. Production `current_actor` never reads this header."""
+def test_caller(
+    x_demo_role: Annotated[str | None, Header()] = None,
+    x_demo_user: Annotated[str | None, Header()] = None,
+    x_demo_email: Annotated[str | None, Header()] = None,
+) -> Caller:
+    """Stand-in for Supabase login. Production `current_caller` never reads these headers.
+
+    X-Demo-User / X-Demo-Email play the Supabase user id and email; without them the caller
+    has no identity (like a dev login) and sees every shipment.
+    """
     if x_demo_role not in {role.value for role in (Actor.BUYER, Actor.SUPPLIER, Actor.REVIEWER)}:
         raise HTTPException(400, "X-Demo-Role header must be Buyer, Supplier or Reviewer")
-    return Actor(x_demo_role)
+    return Caller(Actor(x_demo_role), x_demo_user, x_demo_email.lower() if x_demo_email else None)
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +68,6 @@ def client(seeded: tuple[Engine, Path]) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[evidence_dir] = lambda: files
-    app.dependency_overrides[current_actor] = test_actor
+    app.dependency_overrides[current_caller] = test_caller
     yield TestClient(app)
     app.dependency_overrides.clear()

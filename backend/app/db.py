@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Connection, Engine, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.schema import CreateSchema
 
@@ -33,6 +33,27 @@ def create_tables(engine: Engine) -> None:
         if conn.dialect.name == "postgresql":
             conn.execute(CreateSchema(POSTGRES_SCHEMA, if_not_exists=True))
         Base.metadata.create_all(conn)
+        _add_missing_columns(conn)
+
+
+def _add_missing_columns(conn: Connection) -> None:
+    """create_all makes missing tables but never alters existing ones. Add any nullable
+    column a model gained since the database was created, so it needn't be reset."""
+    schema = POSTGRES_SCHEMA if conn.dialect.name == "postgresql" else None
+    quote = conn.dialect.identifier_preparer.quote
+    insp = inspect(conn)
+    for table in Base.metadata.sorted_tables:
+        have = {c["name"] for c in insp.get_columns(table.name, schema=schema)}
+        for col in table.columns:
+            if col.name in have:
+                continue
+            if not col.nullable:
+                raise RuntimeError(f"New NOT NULL column {table.name}.{col.name}: reset the database")
+            name = f"{quote(schema)}.{quote(table.name)}" if schema else quote(table.name)
+            conn.execute(text(f"ALTER TABLE {name} ADD COLUMN {quote(col.name)} {col.type.compile(conn.dialect)}"))
+            for index in table.indexes:
+                if [c.name for c in index.columns] == [col.name]:
+                    index.create(conn, checkfirst=True)
 
 
 def drop_tables(engine: Engine) -> None:

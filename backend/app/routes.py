@@ -16,15 +16,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
-from pydantic import AwareDatetime, StringConstraints
+from pydantic import AwareDatetime, StringConstraints, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app import operations as ops
+from app.access import can_see
 from app.audit import ChainVerification, EventCheck, verify_chain
-from app.auth import current_actor
+from app.auth import Caller, current_actor, current_caller
 from app.chain import get_chain
 from app.chain.anchoring import anchor_in_background, anchor_shipment, check_shipment, shipment_address
 from app.config import settings
@@ -53,10 +55,16 @@ def inspection_provider() -> InspectionProvider:
 
 Db = Annotated[Session, Depends(get_db)]
 Role = Annotated[Actor, Depends(current_actor)]
+CallerDep = Annotated[Caller, Depends(current_caller)]
 EvidenceRoot = Annotated[Path, Depends(evidence_dir)]
 Provider = Annotated[InspectionProvider, Depends(inspection_provider)]
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+# Matched against the signed-in account's email (app.access), so stored lowercased.
+Email = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, to_lower=True, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+]
 
 
 # --- Request bodies -----------------------------------------------------------------------
@@ -66,6 +74,9 @@ class NewShipment(CamelModel):
     title: Name
     supplier: Name
     terms: AgreementTerms
+    # The manufacturer's account email. The shipment then shows only to them, its creator
+    # and Reviewers. Without one, everyone sees it.
+    recipient_email: Email | None = None
 
 
 class DisputeIn(CamelModel):
@@ -87,6 +98,7 @@ class ShipmentSummary(CamelModel):
     supplier: str
     amount: Money
     status: Status
+    recipient_email: str | None
 
 
 class AgreementOut(CamelModel):
@@ -181,6 +193,7 @@ def _summary_fields(s: Shipment) -> dict[str, object]:
         "supplier": s.supplier,
         "amount": amount,
         "status": s.status,
+        "recipient_email": s.recipient_email,
     }
 
 
@@ -319,21 +332,41 @@ def _read_image(f: UploadFile) -> ops.Upload:
     return upload
 
 
+# --- Access -------------------------------------------------------------------------------
+
+
+def shipment_access(shipment_id: str, db: Db, caller: CallerDep) -> None:
+    """404 for a shipment the caller may not see (app.access), as for one that doesn't exist."""
+    s = db.get(Shipment, shipment_id)
+    if s is None or not can_see(s, caller):
+        raise HTTPException(404, f"Unknown shipment {shipment_id}")
+
+
+def finding_access(finding_id: str, db: Db, caller: CallerDep) -> None:
+    row = db.get(FindingRow, finding_id)
+    s = db.get(Shipment, row.shipment_id) if row else None
+    if s is None or not can_see(s, caller):
+        raise HTTPException(404, f"Unknown finding {finding_id}")
+
+
+Visible = [Depends(shipment_access)]
+
+
 # --- Reads --------------------------------------------------------------------------------
 
 
 @router.get("/shipments")
-def list_shipments(db: Db, role: Role) -> list[ShipmentSummary]:
+def list_shipments(db: Db, caller: CallerDep) -> list[ShipmentSummary]:
     shipments = db.scalars(select(Shipment).options(selectinload(Shipment.agreement)).order_by(Shipment.id.desc()))
-    return [ShipmentSummary(**_summary_fields(s)) for s in shipments]
+    return [ShipmentSummary(**_summary_fields(s)) for s in shipments if can_see(s, caller)]
 
 
-@router.get("/shipments/{shipment_id}")
+@router.get("/shipments/{shipment_id}", dependencies=Visible)
 def get_shipment(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
     return _detail(_load(db, shipment_id), role)
 
 
-@router.get("/shipments/{shipment_id}/audit")
+@router.get("/shipments/{shipment_id}/audit", dependencies=Visible)
 def get_audit(shipment_id: str, db: Db, role: Role) -> AuditOut:
     s = _load(db, shipment_id)
     result: ChainVerification = verify_chain(db, s)
@@ -360,21 +393,51 @@ def get_evidence_file(evidence_id: str, db: Db, root: EvidenceRoot) -> FileRespo
 # --- Writes -------------------------------------------------------------------------------
 
 
-@router.post("/shipments", status_code=201)
-def create_shipment(body: NewShipment, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
+async def new_shipment_body(request: Request) -> NewShipment:
+    """The create body, validated from the raw JSON text.
+
+    FastAPI validates a parsed body in Python mode, where app.money refuses floats (a float
+    there means float money math), so any amount with cents, like 12.07, would be a 422.
+    Validating the JSON text itself reads 12.07 as Decimal("12.07").
+    """
+    raw = await request.body()
+    try:
+        return NewShipment.model_validate_json(raw)
+    except ValidationError as exc:
+        errors = [{**e, "loc": ("body", *e["loc"])} for e in exc.errors(include_url=False)]
+        raise RequestValidationError(errors, body=raw) from exc
+
+
+@router.post(
+    "/shipments",
+    status_code=201,
+    openapi_extra={"requestBody": {"required": True, "content": {"application/json": {}}}},
+)
+def create_shipment(
+    body: Annotated[NewShipment, Depends(new_shipment_body)], db: Db, caller: CallerDep, tasks: BackgroundTasks
+) -> ShipmentDetail:
     s = ops.create_shipment(
-        db, role, title=body.title, buyer=BUYER, supplier=body.supplier, terms=body.terms, now=_now()
+        db,
+        caller.actor,
+        title=body.title,
+        # The creating account's profile name, else its email; a dev login has neither.
+        buyer=(caller.name or caller.email or BUYER)[:200],  # the buyer column is 200 wide
+        supplier=body.supplier,
+        terms=body.terms,
+        now=_now(),
+        created_by=caller.user_id,
+        recipient_email=body.recipient_email,
     )
-    return _committed(db, s.id, role, tasks)
+    return _committed(db, s.id, caller.actor, tasks)
 
 
-@router.post("/shipments/{shipment_id}/agreement/approve")
+@router.post("/shipments/{shipment_id}/agreement/approve", dependencies=Visible)
 def approve_agreement(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.approve_agreement(_load(db, shipment_id, lock=True), role, _now())
     return _committed(db, shipment_id, role, tasks)
 
 
-@router.post("/shipments/{shipment_id}/evidence")
+@router.post("/shipments/{shipment_id}/evidence", dependencies=Visible)
 def upload_evidence(
     shipment_id: str,
     db: Db,
@@ -396,7 +459,7 @@ def upload_evidence(
         raise
 
 
-@router.post("/shipments/{shipment_id}/inspect")
+@router.post("/shipments/{shipment_id}/inspect", dependencies=Visible)
 def inspect(
     shipment_id: str, db: Db, role: Role, root: EvidenceRoot, provider: Provider, tasks: BackgroundTasks
 ) -> ShipmentDetail:
@@ -404,13 +467,13 @@ def inspect(
     return _committed(db, shipment_id, role, tasks)
 
 
-@router.post("/shipments/{shipment_id}/accept")
+@router.post("/shipments/{shipment_id}/accept", dependencies=Visible)
 def accept(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.accept_adjustment(_load(db, shipment_id, lock=True), role, _now())
     return _committed(db, shipment_id, role, tasks)
 
 
-@router.post("/shipments/{shipment_id}/dispute")
+@router.post("/shipments/{shipment_id}/dispute", dependencies=Visible)
 def dispute(
     shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks, body: DisputeIn | None = None
 ) -> ShipmentDetail:
@@ -418,7 +481,7 @@ def dispute(
     return _committed(db, shipment_id, role, tasks)
 
 
-@router.post("/findings/{finding_id}/review")
+@router.post("/findings/{finding_id}/review", dependencies=[Depends(finding_access)])
 def review_finding(finding_id: str, body: ReviewIn, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     row = db.get(FindingRow, finding_id)
     if row is None:
@@ -428,13 +491,13 @@ def review_finding(finding_id: str, body: ReviewIn, db: Db, role: Role, tasks: B
     return _committed(db, s.id, role, tasks)
 
 
-@router.post("/shipments/{shipment_id}/resolve")
+@router.post("/shipments/{shipment_id}/resolve", dependencies=Visible)
 def resolve(shipment_id: str, db: Db, role: Role, tasks: BackgroundTasks) -> ShipmentDetail:
     ops.resolve_dispute(_load(db, shipment_id, lock=True), role, _now())
     return _committed(db, shipment_id, role, tasks)
 
 
-@router.post("/shipments/{shipment_id}/chain/anchor")
+@router.post("/shipments/{shipment_id}/chain/anchor", dependencies=Visible)
 def anchor(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
     """Send whatever of this shipment's history isn't on-chain yet, now (retries failures)."""
     chain = get_chain()
@@ -445,7 +508,7 @@ def anchor(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
     return _detail(_load(db, shipment_id), role)
 
 
-@router.post("/shipments/{shipment_id}/audit/verify")
+@router.post("/shipments/{shipment_id}/audit/verify", dependencies=Visible)
 def verify_audit(shipment_id: str, db: Db, role: Role, root: EvidenceRoot) -> ops.Verification:
     # The chain is read first, without the row lock, so a slow RPC doesn't hold up writes.
     report = check_shipment(_load(db, shipment_id), get_chain())

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
-import { Check, AlertTriangle, ExternalLink, ShieldCheck, Scale } from "lucide-react";
-import { Chip, ErrorNote, Notice, PickRole, TopBar, useStore } from "@/lib/store";
+import { Check, AlertTriangle, ExternalLink, Lock, ShieldCheck, Scale } from "lucide-react";
+import { Chip, ErrorNote, FrozenTag, Notice, PickRole, TopBar, useStore } from "@/lib/store";
 import {
   ApiError,
   type AuditEvent,
@@ -13,7 +13,7 @@ import {
   type Status,
 } from "@/lib/api";
 import { api, useShipment, useShipmentWrite, useVerifyAudit } from "@/lib/queries";
-import { explorerUrl, formatAt, short, unitShort, usd } from "@/lib/format";
+import { FROZEN_NOTE, explorerUrl, formatAt, isFrozen, short, unitShort, usd } from "@/lib/format";
 
 export const Route = createFileRoute("/shipments/$id")({
   head: ({ params }) => ({
@@ -116,10 +116,14 @@ function ShipmentView({ s }: { s: ShipmentDetail }) {
           <h1 className="text-4xl font-semibold tracking-tight">
             {s.title}, ${s.amount.toLocaleString()}
           </h1>
-          <Chip status={s.status} />
+          <div className="flex items-center gap-2">
+            {isFrozen(s.status) && <FrozenTag />}
+            <Chip status={s.status} />
+          </div>
         </div>
         <p className="mt-2 text-muted-foreground">
           {s.supplier} → {s.buyer}
+          {s.recipientEmail && <span> · shared with {s.recipientEmail}</span>}
         </p>
       </div>
 
@@ -142,6 +146,13 @@ function ShipmentView({ s }: { s: ShipmentDetail }) {
           );
         })}
       </div>
+
+      {isFrozen(s.status) && (
+        <div className="flex items-center gap-3 rounded-2xl border border-primary/30 px-5 py-4 text-sm fade-up">
+          <Lock className="h-4 w-4 shrink-0 text-primary" />
+          <span>{FROZEN_NOTE}</span>
+        </div>
+      )}
 
       <div className="flex items-center gap-3 rounded-2xl border border-primary/30 px-5 py-4 text-sm fade-up">
         <Scale className="h-4 w-4 shrink-0 text-primary" />

@@ -144,9 +144,21 @@ def _live_adjustment(s: Shipment) -> Adjustment:
 
 
 def create_shipment(
-    db: Session, actor: Actor, *, title: str, buyer: str, supplier: str, terms: AgreementTerms, now: datetime
+    db: Session,
+    actor: Actor,
+    *,
+    title: str,
+    buyer: str,
+    supplier: str,
+    terms: AgreementTerms,
+    now: datetime,
+    created_by: str | None = None,
+    recipient_email: str | None = None,
 ) -> Shipment:
-    """A new Draft shipment with its agreement terms. Buyer only; nobody has approved yet."""
+    """A new Draft shipment with its agreement terms. Buyer only; nobody has approved yet.
+
+    `created_by` (Supabase user id) and `recipient_email` decide who can see it (app.access).
+    """
     if actor is not Actor.BUYER:
         raise NotPermitted(f"{actor} cannot create a shipment")
     id = next_shipment_id(db)
@@ -158,6 +170,8 @@ def create_shipment(
         supplier=supplier,
         status=Status.DRAFT,
         created_at=now,
+        created_by=created_by,
+        recipient_email=recipient_email,
     )
     s.agreement = Agreement(
         id=next_ids(db, Agreement, "agr", 1)[0], terms=terms.model_dump(mode="json"), terms_hash=hash_json(terms)

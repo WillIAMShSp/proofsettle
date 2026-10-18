@@ -5,7 +5,7 @@ import urllib.error
 import pytest
 from fastapi import HTTPException
 
-from app.auth import actor_from_role, current_actor, profile_role
+from app.auth import Profile, actor_from_role, current_caller, read_profile
 from app.config import Settings, settings
 from app.main import app
 from app.workflow import Actor
@@ -48,7 +48,7 @@ def test_profile_lookup_reads_public_profiles():
 
     class _Rows:
         def one_or_none(self):
-            return ("Reviewer",)
+            return ("Reviewer", "  Rae Reviewer ")
 
     class _Db:
         def execute(self, statement, params):
@@ -59,7 +59,8 @@ def test_profile_lookup_reads_public_profiles():
         def rollback(self):
             raise AssertionError("rollback")
 
-    assert profile_role(_Db(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") is Actor.REVIEWER  # type: ignore[arg-type]
+    profile = read_profile(_Db(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")  # type: ignore[arg-type]
+    assert profile == Profile(Actor.REVIEWER, "Rae Reviewer")
     assert "public.profiles" in str(seen["sql"])
     assert seen["params"] == {"id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 
@@ -77,37 +78,37 @@ def test_missing_profile_is_403():
             raise AssertionError("rollback")
 
     with pytest.raises(HTTPException) as raised:
-        profile_role(_Db(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")  # type: ignore[arg-type]
+        read_profile(_Db(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")  # type: ignore[arg-type]
     assert raised.value.status_code == 403
     assert "profile" in raised.value.detail.lower()
 
 
 def test_demo_role_header_is_not_a_session(client):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     response = client.get("/shipments", headers={"X-Demo-Role": "Buyer"})
     assert response.status_code == 401
     assert "bearer" in response.json()["detail"].lower()
 
 
 def test_dev_role_header_needs_dev_auth(client):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     assert client.get("/shipments", headers={"X-Dev-Role": "Buyer"}).status_code == 401
 
 
 def test_dev_role_header_with_dev_auth(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     monkeypatch.setattr(settings, "dev_auth", True)
     assert client.get("/shipments", headers={"X-Dev-Role": "Buyer"}).status_code == 200
     assert client.get("/shipments", headers={"X-Dev-Role": "Auditor"}).status_code == 403
 
 
 def test_missing_token_is_401(client):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     assert client.get("/shipments").status_code == 401
 
 
 def test_auth_not_configured_is_503(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     monkeypatch.setattr(settings, "supabase_url", "")
     monkeypatch.setattr(settings, "supabase_anon_key", "")
     response = client.get("/shipments", headers={"Authorization": "Bearer token"})
@@ -115,7 +116,7 @@ def test_auth_not_configured_is_503(client, monkeypatch):
 
 
 def test_rejected_supabase_token_is_401(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     monkeypatch.setattr(settings, "supabase_url", "https://example.supabase.co")
     monkeypatch.setattr(settings, "supabase_anon_key", "anon-key")
 
@@ -131,7 +132,7 @@ def test_rejected_supabase_token_is_401(client, monkeypatch):
 
 
 def test_supabase_user_id_must_be_a_uuid(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     monkeypatch.setattr(settings, "supabase_url", "https://example.supabase.co")
     monkeypatch.setattr(settings, "supabase_anon_key", "anon-key")
 
@@ -187,7 +188,7 @@ USER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 
 def test_sqlite_reads_the_profile_through_supabase_rest(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     seen = _fake_supabase(
         monkeypatch,
         {"/auth/v1/user": {"id": USER_ID}, "/rest/v1/profiles": [{"role": "Supplier"}]},
@@ -195,19 +196,19 @@ def test_sqlite_reads_the_profile_through_supabase_rest(client, monkeypatch):
     response = client.get("/shipments", headers={"Authorization": "Bearer session-token"})
     assert response.status_code == 200
     profile_request = seen[1]
-    assert profile_request.full_url.endswith(f"/rest/v1/profiles?select=role&id=eq.{USER_ID}")
+    assert profile_request.full_url.endswith(f"/rest/v1/profiles?select=role,name&id=eq.{USER_ID}")
     assert profile_request.get_header("Authorization") == "Bearer session-token"
 
 
 def test_sqlite_without_a_profile_row_is_403(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     _fake_supabase(monkeypatch, {"/auth/v1/user": {"id": USER_ID}, "/rest/v1/profiles": []})
     response = client.get("/shipments", headers={"Authorization": "Bearer session-token"})
     assert response.status_code == 403
 
 
 def test_rejected_api_key_is_a_config_error_not_a_bad_session(client, monkeypatch):
-    app.dependency_overrides.pop(current_actor)
+    app.dependency_overrides.pop(current_caller)
     bad_key = urllib.error.HTTPError(
         "https://example.supabase.co/auth/v1/user",
         401,

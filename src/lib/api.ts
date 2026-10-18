@@ -153,6 +153,9 @@ export type ShipmentSummary = {
   supplier: string;
   amount: Money;
   status: Status;
+  /** The manufacturer's account email. When set, only they, the creating buyer and
+   * Reviewers see the shipment; when null (the demo seed), everyone does. */
+  recipientEmail: string | null;
 };
 
 /** Where the shipment's record lives on Solana. Null when the backend has no chain configured. */
@@ -214,7 +217,12 @@ export type Verification = {
 
 export type ResetResult = { shipments: string[] };
 
-export type NewShipment = { title: string; supplier: string; terms: AgreementTerms };
+export type NewShipment = {
+  title: string;
+  supplier: string;
+  terms: AgreementTerms;
+  recipientEmail?: string;
+};
 
 /** Every endpoint in API_CONTRACT.md. The HTTP client and the mock both implement it. */
 export interface Api {

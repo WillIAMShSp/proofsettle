@@ -30,8 +30,11 @@ import { MOCK_SEED } from "./mock-seed";
 /** What the mock stores per shipment: the adjustment's numbers are recomputed on read. */
 export type MockShipment = Omit<
   ShipmentDetail,
-  "actions" | "inspection" | "adjustment" | "chain"
+  "actions" | "inspection" | "adjustment" | "chain" | "recipientEmail"
 > & {
+  // Optional: the seed and older saved mock data have none. The mock has no accounts, so it
+  // shows every shipment to everyone (like the backend's dev login).
+  recipientEmail?: string | null;
   findings: Finding[];
   adjustment: Pick<
     Adjustment,
@@ -190,6 +193,7 @@ function detail(s: MockShipment): ShipmentDetail {
   const adjustment = liveAdjustment(s);
   return structuredClone({
     ...rest,
+    recipientEmail: s.recipientEmail ?? null,
     inspection: findings.length ? { findings } : null,
     adjustment,
     actions: actionsFor(s, getStoredRole(), adjustment),
@@ -204,6 +208,7 @@ const summary = ({
   supplier,
   amount,
   status,
+  recipientEmail,
 }: MockShipment): ShipmentSummary => ({
   id,
   title,
@@ -211,6 +216,7 @@ const summary = ({
   supplier,
   amount,
   status,
+  recipientEmail: recipientEmail ?? null,
 });
 
 // --- Writes --------------------------------------------------------------------------------
@@ -315,7 +321,7 @@ export const mockApi: Api = {
   evidenceFileUrl: (ev) =>
     blobUrls.get(ev.id) ?? (ev.kind === "dispatch" ? dispatchImg : receiptImg),
 
-  createShipment: async ({ title, supplier, terms }) => {
+  createShipment: async ({ title, supplier, terms, recipientEmail }) => {
     if (role() !== "Buyer") throw new ApiError(403, `${role()} cannot create a shipment`);
     const all = load();
     const id = `PS-${Math.max(1000, ...all.map((x) => Number(x.id.slice(3)))) + 1}`;
@@ -324,6 +330,7 @@ export const mockApi: Api = {
       title,
       buyer: "Northgate Assembly Ltd",
       supplier,
+      recipientEmail: recipientEmail?.trim().toLowerCase() || null,
       amount: terms.invoiceAmount,
       status: "Draft",
       disputeReason: null,

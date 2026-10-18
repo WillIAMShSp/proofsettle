@@ -1,3 +1,5 @@
+import type { Status } from "./api";
+
 /** "$9,700" for whole dollars, "$99.99" otherwise, as the backend writes amounts. */
 export function usd(amount: number): string {
   const whole = Number.isInteger(amount);
@@ -24,3 +26,10 @@ export const short = (x: string) => `${x.slice(0, 8)}…${x.slice(-6)}`;
 
 /** "Component #063" -> "#063"; anything without a "#" is returned unchanged. */
 export const unitShort = (unitRef: string) => unitRef.match(/#\S+$/)?.[0] ?? unitRef;
+
+/** While goods are in transit the deal is frozen: the agreed terms and amount can't change
+ * (on-chain too) and nothing settles until receipt evidence is in. No funds are held. */
+export const isFrozen = (status: Status) => status === "In Transit";
+
+export const FROZEN_NOTE =
+  "Frozen while the goods are in transit: the agreed amount and terms can't change, and nothing settles until the buyer's receipt photos are in.";

@@ -13,7 +13,7 @@ ASSETS = Path(__file__).resolve().parents[2] / "src" / "assets"
 BUYER, SUPPLIER, REVIEWER = ({"X-Demo-Role": r} for r in ("Buyer", "Supplier", "Reviewer"))
 
 # Key sets from the JSON examples in API_CONTRACT.md.
-SUMMARY_KEYS = {"id", "title", "buyer", "supplier", "amount", "status"}
+SUMMARY_KEYS = {"id", "title", "buyer", "supplier", "amount", "status", "recipientEmail"}
 DETAIL_KEYS = SUMMARY_KEYS | {
     "disputeReason",
     "agreement",
@@ -77,6 +77,7 @@ def test_list_matches_dashboard_shape(client):
             "supplier": "Ferro Precision Works",
             "amount": 10000,
             "status": "Proposed",
+            "recipientEmail": None,
         },
         {
             "id": "PS-1038",
@@ -85,6 +86,7 @@ def test_list_matches_dashboard_shape(client):
             "supplier": "Kestrel Fluid Systems",
             "amount": 6400,
             "status": "In Transit",
+            "recipientEmail": None,
         },
         {
             "id": "PS-1031",
@@ -93,6 +95,7 @@ def test_list_matches_dashboard_shape(client):
             "supplier": "Ferro Precision Works",
             "amount": 3750,
             "status": "Resolved",
+            "recipientEmail": None,
         },
     ]
 

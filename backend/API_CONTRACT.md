@@ -315,7 +315,7 @@ Amounts are written as `$9,700` for whole dollars and as `$99.99` otherwise.
 ### `GET /shipments` — shipment list (implemented)
 
 Exactly the dashboard's fields. `events` is omitted from list items; the dashboard doesn't
-read it.
+read it. Only the shipments the caller may see are listed (see "Visibility" below).
 
 ```json
 [
@@ -325,10 +325,21 @@ read it.
     "buyer": "Northgate Assembly Ltd",
     "supplier": "Ferro Precision Works",
     "amount": 10000,
-    "status": "Proposed"
+    "status": "Proposed",
+    "recipientEmail": null
   }
 ]
 ```
+
+**Visibility** (`backend/app/access.py`). Shipments belong to accounts. A shipment is
+visible only to the buyer account that created it, the account signed in with its
+`recipientEmail` (the manufacturer's account email, lowercased; `null` if none was given),
+and Reviewers. Everyone else gets `404` on every `/shipments/{id}...` and `/findings/{id}...`
+route, as for an unknown id, and doesn't see it in the list. A shipment with no owner (a
+freshly loaded demo seed) is seen by no account until `python -m app.ownership <user-id>`
+assigns it. A dev login (`PROOFSETTLE_DEV_AUTH`) has no identity and sees everything. Roles
+still decide what a caller can do. `GET /evidence/{id}/file` needs no token, so it doesn't
+check visibility.
 
 ### `GET /shipments/{id}` — shipment detail (implemented)
 
@@ -343,6 +354,7 @@ A superset of `Shipment`. Fields not yet created are `null` (e.g. `adjustment` b
   "supplier": "Ferro Precision Works",
   "amount": 10000,
   "status": "Proposed",
+  "recipientEmail": null,
   "disputeReason": null,
 
   "agreement": {
@@ -516,7 +528,7 @@ Routes with a body reject unknown fields with `422`.
 
 | Endpoint | Role | Body | Effect |
 |----------|------|------|--------|
-| `POST /shipments` | Buyer | `{ title, supplier, terms }` (`terms` is `AgreementTerms`) | New `Draft` shipment, next free id (`PS-1043`, ...). `buyer` is the demo buyer, Northgate Assembly Ltd. Returns `201`. |
+| `POST /shipments` | Buyer | `{ title, supplier, terms, recipientEmail? }` (`terms` is `AgreementTerms`; `recipientEmail` is the manufacturer's account email) | New `Draft` shipment, next free id (`PS-1043`, ...), owned by the calling account. `buyer` is that account's profile name, else its email (a dev login gets the demo buyer, Northgate Assembly Ltd). Only the creator, the `recipientEmail` account and Reviewers see it (see "Visibility"). Returns `201`. |
 | `POST /shipments/{id}/agreement/approve` | Buyer, Supplier | none | Records that party's approval. The second one moves `Draft → Agreed` (actor System). Approving twice is a no-op. |
 | `POST /shipments/{id}/evidence` | Supplier in `Agreed` (dispatch), Buyer in `In Transit` (receipt) | `multipart/form-data`, one or more `files` | Stores JPEG/PNG photos. The kind follows from the status. Reaching `minDispatchPhotos` / `minReceiptPhotos` moves `Agreed → In Transit` / `In Transit → Inspection`. |
 | `POST /shipments/{id}/inspect` | Buyer, Supplier | none | Runs the inspection provider in `Inspection`, stores its findings, then System moves `Inspection → Proposed` with the engine's adjustment. |

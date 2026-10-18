@@ -91,6 +91,9 @@ class Shipment(Base):
     status: Mapped[Status] = mapped_column(_enum(Status, "shipment_status"))
     dispute_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    # Who may see the shipment (app.access). Null on the demo seed, which everyone sees.
+    created_by: Mapped[str | None] = mapped_column(String(64))  # Supabase user id
+    recipient_email: Mapped[str | None] = mapped_column(String(320), index=True)  # lowercased
 
     agreement: Mapped["Agreement | None"] = relationship(back_populates="shipment", uselist=False)
     # Ids are sequential ("ev_09", "ev_10", ..., "ev_100"): shorter first, then by text.

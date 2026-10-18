@@ -1,6 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { Lock } from "lucide-react";
 import { DEV_AUTH, ROLE_KEY, USE_MOCK, getStoredRole, isRole, type Role, type Status } from "./api";
+import { FROZEN_NOTE } from "./format";
 import { fetchProfile, isSupabaseConfigured, supabase } from "./supabase";
 
 export { STATUSES, type Role, type Status } from "./api";
@@ -39,6 +42,14 @@ function rememberMockRole(user: SessionUser | null) {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<SessionUser | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const qc = useQueryClient();
+  const account = user?.id ?? null;
+
+  // Signed out: drop every cached shipment, so nothing of that account stays in memory.
+  // (Queries are keyed by account too, so a different account never reads another's.)
+  useEffect(() => {
+    if (account === null) qc.removeQueries();
+  }, [account, qc]);
 
   const setUser = (next: SessionUser | null) => {
     setUserState(next);
@@ -135,6 +146,18 @@ export function Chip({ status }: { status: Status }) {
       className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${statusTone[status]}`}
     >
       {status}
+    </span>
+  );
+}
+
+export function FrozenTag() {
+  return (
+    <span
+      title={FROZEN_NOTE}
+      className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 px-3 py-1 text-xs font-medium text-primary"
+    >
+      <Lock className="h-3 w-3" />
+      Frozen
     </span>
   );
 }
