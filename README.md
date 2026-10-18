@@ -157,17 +157,6 @@ The app should now be running locally.
 - [ ] Enterprise integrations
 - [ ] Public verification API / marketplace
 
-## Looking for Partners
-
-We're seeking pilot partners in logistics and cold-chain, mentorship on taking ProofSettle enterprise-ready, and support to build mobile SDKs and hardened key management. If that's you, reach out!
-
-## Team
-
-**Team ProofSettle**
-
-- *Name* — [email@example.com](mailto:email@example.com)
-- *Name* — [email@example.com](mailto:email@example.com)
-
 ## License
 
 *Add a license (e.g., MIT) before publishing.*
