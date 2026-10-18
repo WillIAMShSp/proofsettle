@@ -429,6 +429,11 @@ function InspectionSection({ s }: { s: ShipmentDetail }) {
             : "No inspection yet. It runs once the receipt photos are uploaded."}
         </p>
       )}
+      {inspect.isPending && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          The AI is looking at the dispatch and receipt photos. This can take a minute or two.
+        </p>
+      )}
       <ErrorNote error={inspect.error ?? review.error} />
       <p className="mt-6 text-sm text-muted-foreground">
         AI can detect visible damage but cannot prove when or where it occurred. Findings are

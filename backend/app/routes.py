@@ -33,6 +33,7 @@ from app.chain.anchoring import anchor_in_background, anchor_shipment, check_shi
 from app.config import settings
 from app.db import get_db
 from app.findings import Finding, ReviewOverride
+from app.gemini import GeminiProvider
 from app.inspection import InspectionProvider, MockProvider
 from app.models import AdjustmentRow, AuditEvent, ChainStatus, ChatMessage, Evidence, FindingRow, Shipment
 from app.money import Money
@@ -50,7 +51,9 @@ def evidence_dir() -> Path:
 
 
 def inspection_provider() -> InspectionProvider:
-    # The only provider for now; a vision-model provider plugs in here.
+    """Gemini when PROOFSETTLE_GEMINI_API_KEY is set, else the deterministic mock."""
+    if settings.gemini_api_key:
+        return GeminiProvider(settings.gemini_api_key, settings.gemini_model, timeout=settings.gemini_timeout_s)
     return MockProvider()
 
 

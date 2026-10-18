@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     # session, for when Supabase sign-up is unavailable. Lets any caller act as any role.
     dev_auth: bool = False
 
+    # --- AI inspection (app/gemini). Without a key the backend uses the deterministic
+    # MockProvider. Put the key in backend/.env (git-ignored), never in the committed root .env.
+    gemini_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("PROOFSETTLE_GEMINI_API_KEY", "GEMINI_API_KEY"),
+    )
+    # A Gemini model that takes images and JSON output (ai.google.dev/gemini-api/docs/models).
+    gemini_model: str = "gemini-3.8-flash"
+    # Seconds to wait for one inspection. One with 2 photos took 87 s on gemini-3.8-flash,
+    # so a full set of photos needs minutes, not seconds.
+    gemini_timeout_s: float = 300.0
+
     # --- Solana anchoring (app/chain). Off unless the RPC URL and all four keypairs are set.
     # JSON-RPC endpoint, e.g. https://api.devnet.solana.com or http://127.0.0.1:8899.
     solana_rpc_url: str = ""

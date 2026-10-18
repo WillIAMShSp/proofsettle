@@ -28,6 +28,27 @@ npm run dev
 - React
 - Tailwind CSS
 
+## AI inspection (Gemini)
+
+"Run inspection" on a shipment sends its dispatch and receipt photos to Google's Gemini API
+(`backend/app/gemini.py`). Gemini reports the damage it sees as findings: which unit, which
+defect type, how confident it is, which photos show it, and whether it was already there at
+dispatch. The backend checks that output against a fixed schema and the photos it sent, then
+the settlement engine turns the findings into the proposed adjustment using the agreed terms.
+Gemini never sets an amount, and low-confidence findings go to a Reviewer.
+
+To turn it on, add a key from https://aistudio.google.com/apikey to `backend/.env`
+(git-ignored; never the committed root `.env`) and restart the backend:
+
+```bash
+PROOFSETTLE_GEMINI_API_KEY=your-key
+# optional, default gemini-3.8-flash:
+PROOFSETTLE_GEMINI_MODEL=gemini-3.8-flash
+```
+
+Without a key, inspections use the built-in mock findings. All photos of one inspection go in
+one request, which Gemini caps at 20 MB.
+
 ## Solana anchoring
 
 The FastAPI backend (`backend/`) can mirror every shipment's audit trail onto the ProofSettle
