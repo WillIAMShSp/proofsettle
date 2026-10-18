@@ -19,7 +19,8 @@ class Base(DeclarativeBase):
 def make_engine(url: str) -> Engine:
     # SQLite connections are thread-bound by default; FastAPI runs sync routes in a threadpool.
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    engine = create_engine(url, connect_args=connect_args)
+    # pool_pre_ping: Supabase's pooler closes idle connections; test one before reusing it.
+    engine = create_engine(url, connect_args=connect_args, pool_pre_ping=not url.startswith("sqlite"))
     if engine.dialect.name == "postgresql":
         # Rendered into every statement (DDL included), so it works through any pooler.
         engine = engine.execution_options(schema_translate_map={None: POSTGRES_SCHEMA})

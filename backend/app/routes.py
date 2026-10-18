@@ -12,14 +12,14 @@ amount or a status; bodies that exist reject unknown fields with 422, and routes
 body ignore whatever is sent.
 """
 
+import contextlib
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import AwareDatetime, StringConstraints, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
@@ -40,14 +40,15 @@ from app.money import Money
 from app.schemas import CamelModel
 from app.seed_db import BUYER, reset_and_seed
 from app.settlement import Adjustment, compute_adjustment, usd
+from app.storage import EvidenceStore, StorageError, default_store
 from app.terms import AgreementTerms
 from app.workflow import Actor, AdjustmentAcceptance, Status, can_accept, can_dispute
 
 router = APIRouter()
 
 
-def evidence_dir() -> Path:
-    return settings.evidence_dir
+def evidence_store() -> EvidenceStore:
+    return default_store()
 
 
 def inspection_provider() -> InspectionProvider:
@@ -60,7 +61,7 @@ def inspection_provider() -> InspectionProvider:
 Db = Annotated[Session, Depends(get_db)]
 Role = Annotated[Actor, Depends(current_actor)]
 CallerDep = Annotated[Caller, Depends(current_caller)]
-EvidenceRoot = Annotated[Path, Depends(evidence_dir)]
+Store = Annotated[EvidenceStore, Depends(evidence_store)]
 Provider = Annotated[InspectionProvider, Depends(inspection_provider)]
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -495,14 +496,14 @@ def list_messages(shipment_id: str, db: Db, caller: CallerDep) -> list[MessageOu
 
 
 @router.get("/evidence/{evidence_id}/file")
-def get_evidence_file(evidence_id: str, db: Db, root: EvidenceRoot) -> FileResponse:
+def get_evidence_file(evidence_id: str, db: Db, store: Store) -> Response:
     ev = db.get(Evidence, evidence_id)
     if ev is None:
         raise HTTPException(404, f"Unknown evidence {evidence_id}")
-    path = ops.evidence_path(root, ev)
-    if path is None:
+    data = store.get(ev.file_name)
+    if data is None:
         raise HTTPException(404, f"File for evidence {evidence_id} is missing")
-    return FileResponse(path, media_type=ev.content_type)
+    return Response(data, media_type=ev.content_type)
 
 
 # --- Writes -------------------------------------------------------------------------------
@@ -557,7 +558,7 @@ def upload_evidence(
     shipment_id: str,
     db: Db,
     role: Role,
-    root: EvidenceRoot,
+    store: Store,
     tasks: BackgroundTasks,
     files: Annotated[list[UploadFile], File()],
 ) -> ShipmentDetail:
@@ -565,20 +566,20 @@ def upload_evidence(
     ops.upload_slot(s, role)  # 403/409 before looking at the files
     if len(files) > settings.max_evidence_files:
         raise HTTPException(413, f"At most {settings.max_evidence_files} files per upload")
-    written = ops.add_evidence(s, role, [_read_image(f) for f in files], root, _now())
+    written = ops.add_evidence(s, role, [_read_image(f) for f in files], store, _now())
     try:
         return _committed(db, shipment_id, role, tasks)
     except Exception:
-        for path in written:
-            path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError, StorageError):  # keep the original error
+            store.delete(written)
         raise
 
 
 @router.post("/shipments/{shipment_id}/inspect", dependencies=Visible)
 def inspect(
-    shipment_id: str, db: Db, role: Role, root: EvidenceRoot, provider: Provider, tasks: BackgroundTasks
+    shipment_id: str, db: Db, role: Role, store: Store, provider: Provider, tasks: BackgroundTasks
 ) -> ShipmentDetail:
-    ops.run_inspection(_load(db, shipment_id, lock=True), role, provider, root, _now())
+    ops.run_inspection(_load(db, shipment_id, lock=True), role, provider, store, _now())
     return _committed(db, shipment_id, role, tasks)
 
 
@@ -670,11 +671,11 @@ def anchor(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
 
 
 @router.post("/shipments/{shipment_id}/audit/verify", dependencies=Visible)
-def verify_audit(shipment_id: str, db: Db, role: Role, root: EvidenceRoot) -> ops.Verification:
+def verify_audit(shipment_id: str, db: Db, role: Role, store: Store) -> ops.Verification:
     # The chain is read first, without the row lock, so a slow RPC doesn't hold up writes.
     report = check_shipment(_load(db, shipment_id), get_chain())
     chain = ops.ChainCheck(available=report.available, anchored=report.anchored, mismatches=report.mismatches)
-    result = ops.verify(_load(db, shipment_id, lock=True), root, _now(), chain=chain)
+    result = ops.verify(_load(db, shipment_id, lock=True), store, _now(), chain=chain)
     db.commit()  # each evidence item's `verified`
     return result
 
@@ -684,11 +685,11 @@ class ResetOut(CamelModel):
 
 
 @router.post("/dev/reset")
-def dev_reset(db: Db, root: EvidenceRoot) -> ResetOut:
+def dev_reset(db: Db, store: Store) -> ResetOut:
     """Drop every table and reload the demo seed. 404 unless PROOFSETTLE_DEV_MODE=true."""
     if not settings.dev_mode:
         raise HTTPException(404, "Not Found")
     bind = db.get_bind()
     db.close()
-    reset_and_seed(bind, root)  # type: ignore[arg-type]
+    reset_and_seed(bind, store)  # type: ignore[arg-type]
     return ResetOut(shipments=tuple(db.scalars(select(Shipment.id).order_by(Shipment.id.desc()))))

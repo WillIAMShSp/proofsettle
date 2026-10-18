@@ -28,6 +28,32 @@ npm run dev
 - React
 - Tailwind CSS
 
+## Where data is stored (Supabase)
+
+Sign-in and profiles are Supabase Auth. Shipments, agreements, the audit trail, chat and
+invoices go in the Supabase Postgres database (their own `proofsettle` schema, which the
+public Data API doesn't expose), and evidence photos in a private Supabase Storage bucket
+(`evidence`). Without the settings below the backend falls back to a local SQLite file
+(`backend/proofsettle.db`) and folder (`backend/storage/evidence`), which is only for
+development.
+
+In `backend/.env` (git-ignored; never the committed root `.env`):
+
+```bash
+# Supabase -> Connect -> Session pooler. Note "+psycopg"; URL-encode special characters in the password.
+PROOFSETTLE_DATABASE_URL=postgresql+psycopg://postgres.<project-ref>:<password>@<host>.pooler.supabase.com:5432/postgres
+# Supabase -> Project Settings -> API Keys -> secret key. Server-side only.
+PROOFSETTLE_SUPABASE_SECRET_KEY=sb_secret_...
+```
+
+To move data that is already in the local files to Supabase (copies exactly, checks every
+photo hash and audit chain, and refuses if Supabase already has shipments):
+
+```bash
+cd backend
+uv run python -m app.migrate
+```
+
 ## AI inspection (Gemini)
 
 "Run inspection" on a shipment sends its dispatch and receipt photos to Google's Gemini API

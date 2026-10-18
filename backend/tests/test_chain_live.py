@@ -24,7 +24,8 @@ from app.chain.program import CHAIN_STATUS, Chain, Signer
 from app.chain.rpc import SolanaRpc
 from app.hashing import sha256_hex
 from app.models import AuditEvent, ChainStatus, Evidence
-from app.routes import evidence_dir
+from app.routes import evidence_store
+from app.storage import LocalStore
 from app.workflow import Status
 
 RPC_URL = os.environ.get("PROOFSETTLE_TEST_SOLANA_RPC", "")
@@ -171,7 +172,7 @@ def test_a_swapped_photo_is_caught_by_the_chain(client, db, chain, seeded):
     (files / ev.file_name).write_bytes(forged)
     ev.sha256 = sha256_hex(forged)
     db.commit()
-    client.app.dependency_overrides[evidence_dir] = lambda: files
+    client.app.dependency_overrides[evidence_store] = lambda: LocalStore(files)
 
     v = client.post("/shipments/PS-1038/audit/verify", headers=BUYER).json()
     assert all(item["ok"] for item in v["evidence"])  # the local check alone is fooled

@@ -10,11 +10,10 @@ Errors are app.workflow's TransitionError subclasses (400/403/409) and
 app.inspection.InspectionFailed (502).
 """
 
-import hashlib
+import contextlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 from pydantic import AwareDatetime
 from sqlalchemy import select
@@ -28,6 +27,7 @@ from app.models import AdjustmentRow, Agreement, Evidence, EvidenceKind, Finding
 from app.resolution import resolve, review_finding
 from app.schemas import CamelModel
 from app.settlement import Adjustment, compute_adjustment, usd
+from app.storage import EvidenceStore, StorageError
 from app.terms import AgreementTerms
 from app.workflow import (
     Actor,
@@ -89,13 +89,6 @@ def next_ids(
 def next_shipment_id(db: Session) -> str:
     used = [int(m.group(1)) for i in db.scalars(select(Shipment.id)) if (m := re.fullmatch(r"PS-(\d+)", i))]
     return f"PS-{max(used, default=1000) + 1}"
-
-
-def evidence_path(root: Path, ev: Evidence) -> Path | None:
-    """The stored file for `ev`, or None if it is missing or would escape `root`."""
-    base = root.resolve()
-    path = (base / ev.file_name).resolve()
-    return path if path.is_relative_to(base) and path.is_file() else None
 
 
 def adjustment_payload(adjustment_id: str, adj: Adjustment) -> dict[str, object]:
@@ -227,12 +220,12 @@ def upload_slot(s: Shipment, actor: Actor) -> tuple[EvidenceKind, Status]:
     return slot
 
 
-def add_evidence(s: Shipment, actor: Actor, uploads: list[Upload], root: Path, now: datetime) -> list[Path]:
+def add_evidence(s: Shipment, actor: Actor, uploads: list[Upload], store: EvidenceStore, now: datetime) -> list[str]:
     """Store dispatch (Agreed, Supplier) or receipt (In Transit, Buyer) photos.
 
     Each file's SHA-256 is taken from the exact uploaded bytes before they're written.
     Reaching the agreement's minimum photo count moves the shipment on (Agreed -> In
-    Transit, In Transit -> Inspection). Returns the files written, so the caller can delete
+    Transit, In Transit -> Inspection). Returns the stored names, so the caller can delete
     them if the commit fails.
     """
     kind, target = upload_slot(s, actor)
@@ -270,22 +263,21 @@ def add_evidence(s: Shipment, actor: Actor, uploads: list[Upload], root: Path, n
         text += f"; shipment moved to {target}"
     append_event(s, EventType.EVIDENCE_UPLOADED, actor, payload, text=text, at=now)
 
-    root.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
+    written: list[str] = []
     try:
         for ev, data in new:
-            path = root / ev.file_name
-            with path.open("xb") as f:
-                f.write(data)
-            written.append(path)
-    except OSError:
-        for path in written:
-            path.unlink(missing_ok=True)
+            store.put(ev.file_name, data, ev.content_type)
+            written.append(ev.file_name)
+    except (OSError, StorageError):
+        with contextlib.suppress(OSError, StorageError):  # keep the original error
+            store.delete(written)
         raise
     return written
 
 
-def run_inspection(s: Shipment, actor: Actor, provider: InspectionProvider, root: Path, now: datetime) -> None:
+def run_inspection(
+    s: Shipment, actor: Actor, provider: InspectionProvider, store: EvidenceStore, now: datetime
+) -> None:
     """Inspect the photos, store the validated findings, then System moves Inspection -> Proposed.
 
     The photos are re-hashed first and the inspection is refused if any file changed. The
@@ -299,8 +291,7 @@ def run_inspection(s: Shipment, actor: Actor, provider: InspectionProvider, root
 
     photos: dict[EvidenceKind, list[Photo]] = {EvidenceKind.DISPATCH: [], EvidenceKind.RECEIPT: []}
     for ev in s.evidence:
-        path = evidence_path(root, ev)
-        data = path.read_bytes() if path else None
+        data = store.get(ev.file_name)
         if data is None or sha256_hex(data) != ev.sha256:
             raise PreconditionFailed(f"Evidence {ev.id} is missing or no longer matches its SHA-256")
         photos[ev.kind].append(Photo(ev.id, ev.kind.value, ev.content_type, ev.sha256, data))
@@ -438,7 +429,7 @@ class Verification(CamelModel):
     verified_at: AwareDatetime
 
 
-def verify(s: Shipment, root: Path, now: datetime, *, chain: ChainCheck | None = None) -> Verification:
+def verify(s: Shipment, store: EvidenceStore, now: datetime, *, chain: ChainCheck | None = None) -> Verification:
     """Re-hash the agreement terms and every evidence file, and walk the event chain.
 
     Sets each evidence item's `verified` to its result. `chain` is the comparison with the
@@ -458,11 +449,8 @@ def verify(s: Shipment, root: Path, now: datetime, *, chain: ChainCheck | None =
 
     evidence = []
     for ev in s.evidence:
-        path = evidence_path(root, ev)
-        recomputed = None
-        if path:
-            with path.open("rb") as f:
-                recomputed = hashlib.file_digest(f, "sha256").hexdigest()
+        data = store.get(ev.file_name)
+        recomputed = sha256_hex(data) if data is not None else None
         ev.verified = recomputed == ev.sha256
         evidence.append(HashCheck(id=ev.id, stored_hash=ev.sha256, recomputed_hash=recomputed, ok=ev.verified))
 

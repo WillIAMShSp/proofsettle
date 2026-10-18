@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth import Caller, current_caller
 from app.chain import set_chain
+from app.config import settings
 from app.db import get_db, make_engine
 from app.main import app
-from app.routes import evidence_dir
+from app.routes import evidence_store
 from app.seed_db import reset_and_seed
+from app.storage import LocalStore
 from app.workflow import Actor
 
 
@@ -36,6 +38,14 @@ def test_caller(
 
 
 @pytest.fixture(autouse=True)
+def no_real_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a developer's backend/.env keys out of the tests: no real Gemini inspection, no
+    real Supabase Storage. Tests that need either set it up themselves."""
+    monkeypatch.setattr(settings, "gemini_api_key", "")
+    monkeypatch.setattr(settings, "supabase_secret_key", "")
+
+
+@pytest.fixture(autouse=True)
 def no_configured_chain() -> Iterator[None]:
     """Keep a developer's backend/.env (a live Solana RPC) out of the tests. Tests that need a
     chain install one with set_chain, as test_chain_live does."""
@@ -49,7 +59,7 @@ def seeded(tmp_path: Path) -> Iterator[tuple[Engine, Path]]:
     """A fresh SQLite database (and evidence folder) with the three demo shipments."""
     engine = make_engine(f"sqlite:///{(tmp_path / 'test.db').as_posix()}")
     files = tmp_path / "evidence"
-    reset_and_seed(engine, files)
+    reset_and_seed(engine, LocalStore(files))
     yield engine, files
     engine.dispose()
 
@@ -70,7 +80,7 @@ def client(seeded: tuple[Engine, Path]) -> Iterator[TestClient]:
             yield session
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[evidence_dir] = lambda: files
+    app.dependency_overrides[evidence_store] = lambda: LocalStore(files)
     app.dependency_overrides[current_caller] = test_caller
     yield TestClient(app)
     app.dependency_overrides.clear()

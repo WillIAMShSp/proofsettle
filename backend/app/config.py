@@ -36,8 +36,19 @@ class Settings(BaseSettings):
             "VITE_SUPABASE_ANON_KEY",
         ),
     )
-    # Uploaded evidence files, named by evidence id.
+    # Uploaded evidence files, named by evidence id: in this folder, unless the secret key
+    # below is set, which keeps them in the private Supabase Storage bucket instead.
     evidence_dir: Path = Path("./storage/evidence")
+    # The project's secret key (sb_secret_..., or the legacy service_role JWT). Server-side
+    # only: it bypasses Row Level Security. Lets the backend use Supabase Storage. Put it in
+    # backend/.env (git-ignored), never the committed root .env or anything VITE_.
+    supabase_secret_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "PROOFSETTLE_SUPABASE_SECRET_KEY", "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"
+        ),
+    )
+    evidence_bucket: str = "evidence"
     # The frontend dev server: @lovable.dev/vite-tanstack-config pins it to port 8080.
     cors_origins: list[str] = ["http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"]
     # Per uploaded evidence file, and files per upload request.

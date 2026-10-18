@@ -4,7 +4,7 @@ PS-1042 (Proposed), PS-1038 (In Transit) and PS-1031 (Resolved), as API_CONTRACT
 describes. Each shipment is replayed through the workflow (transition, review_finding,
 resolve) and every step is logged with append_event, so the stored statuses follow the
 rules and every audit chain verifies. Evidence files are the frontend's demo photos
-(src/assets/dispatch.jpg and receipt.jpg), copied into settings.evidence_dir with their
+(src/assets/dispatch.jpg and receipt.jpg), copied into the evidence store with their
 real SHA-256.
 """
 
@@ -15,7 +15,6 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.audit import EventType, append_event, iso_utc
-from app.config import settings
 from app.db import create_tables, drop_tables, engine
 from app.findings import Finding
 from app.hashing import hash_json, sha256_hex, shipment_uuid
@@ -24,6 +23,7 @@ from app.operations import adjustment_payload
 from app.resolution import resolve, review_finding
 from app.seed import PS_1031_FINDINGS, PS_1031_TERMS, PS_1038_TERMS, PS_1042_FINDINGS, PS_1042_TERMS
 from app.settlement import Adjustment, compute_adjustment, usd
+from app.storage import EvidenceStore, LocalStore, SupabaseStore, default_store
 from app.terms import AgreementTerms
 from app.workflow import Actor, Status, transition
 
@@ -39,8 +39,8 @@ def at(month: int, day: int, hour: int, minute: int) -> datetime:
 class _Builder:
     """Replays one shipment's history, logging each step to its audit chain."""
 
-    def __init__(self, db: Session, evidence_dir: Path, shipment: Shipment) -> None:
-        self.db, self.evidence_dir, self.s = db, evidence_dir, shipment
+    def __init__(self, db: Session, store: EvidenceStore, shipment: Shipment) -> None:
+        self.db, self.store, self.s = db, store, shipment
         db.add(shipment)
         db.flush()
 
@@ -88,7 +88,7 @@ class _Builder:
         records = []
         for ev_id in ids:
             file_name = f"{ev_id}.jpg"
-            (self.evidence_dir / file_name).write_bytes(data)
+            self.store.put(file_name, data, "image/jpeg")
             ev = Evidence(
                 id=ev_id,
                 shipment_id=self.s.id,
@@ -199,7 +199,7 @@ class _Builder:
         return adj
 
 
-def _new(db: Session, evidence_dir: Path, id: str, title: str, supplier: str, created: datetime) -> _Builder:
+def _new(db: Session, store: EvidenceStore, id: str, title: str, supplier: str, created: datetime) -> _Builder:
     shipment = Shipment(
         id=id,
         chain_uuid=shipment_uuid(id),
@@ -209,15 +209,14 @@ def _new(db: Session, evidence_dir: Path, id: str, title: str, supplier: str, cr
         status=Status.DRAFT,
         created_at=created,
     )
-    return _Builder(db, evidence_dir, shipment)
+    return _Builder(db, store, shipment)
 
 
-def seed(db: Session, evidence_dir: Path) -> None:
+def seed(db: Session, store: EvidenceStore) -> None:
     """Load the three demo shipments into an empty database."""
-    evidence_dir.mkdir(parents=True, exist_ok=True)
 
     # PS-1042: the shipment the detail page shows. Event texts are store.tsx's, verbatim.
-    b = _new(db, evidence_dir, "PS-1042", "100 metal components", "Ferro Precision Works", at(10, 9, 10, 12))
+    b = _new(db, store, "PS-1042", "100 metal components", "Ferro Precision Works", at(10, 9, 10, 12))
     b.draft("agr_01", PS_1042_TERMS, at(10, 9, 10, 12), "Agreement drafted: 100 components, $10,000")
     b.approve(buyer_at=at(10, 9, 10, 12), supplier_at=at(10, 9, 14, 40))
     b.photos(EvidenceKind.DISPATCH, ["ev_01", "ev_02", "ev_03", "ev_04"], at(10, 11, 8, 5))
@@ -227,14 +226,14 @@ def seed(db: Session, evidence_dir: Path) -> None:
     b.propose("adj_01", at(10, 15, 16, 32))
 
     # PS-1038: dispatched, not yet received.
-    b = _new(db, evidence_dir, "PS-1038", "40 hydraulic valves", "Kestrel Fluid Systems", at(10, 12, 9, 0))
+    b = _new(db, store, "PS-1038", "40 hydraulic valves", "Kestrel Fluid Systems", at(10, 12, 9, 0))
     b.draft("agr_02", PS_1038_TERMS, at(10, 12, 9, 0), "Agreement drafted: 40 valves, $6,400")
     b.approve(buyer_at=at(10, 12, 9, 0), supplier_at=at(10, 12, 15, 20))
     b.photos(EvidenceKind.DISPATCH, ["ev_09", "ev_10", "ev_11", "ev_12"], at(10, 14, 7, 45))
     b.in_transit(at(10, 14, 8, 10))
 
     # PS-1031: proposed, disputed by the Supplier, resolved by the Reviewer.
-    b = _new(db, evidence_dir, "PS-1031", "250 steel brackets", "Ferro Precision Works", at(9, 14, 11, 0))
+    b = _new(db, store, "PS-1031", "250 steel brackets", "Ferro Precision Works", at(9, 14, 11, 0))
     b.draft("agr_03", PS_1031_TERMS, at(9, 14, 11, 0), "Agreement drafted: 250 brackets, $3,750")
     b.approve(buyer_at=at(9, 14, 11, 0), supplier_at=at(9, 15, 9, 30))
     b.photos(EvidenceKind.DISPATCH, ["ev_13", "ev_14", "ev_15", "ev_16"], at(9, 18, 7, 30))
@@ -250,21 +249,24 @@ def seed(db: Session, evidence_dir: Path) -> None:
     db.flush()
 
 
-def reset_and_seed(bind: Engine, evidence_dir: Path) -> None:
+def reset_and_seed(bind: Engine, store: EvidenceStore) -> None:
     drop_tables(bind)
     create_tables(bind)
-    for old in evidence_dir.glob("ev_*") if evidence_dir.exists() else ():
-        old.unlink()
+    store.clear()
     with Session(bind) as db:
-        seed(db, evidence_dir)
+        seed(db, store)
         db.commit()
 
 
 def main() -> None:
     url = engine.url.render_as_string(hide_password=True)
     print(f"Resetting {url} and loading PS-1042, PS-1038, PS-1031")
-    reset_and_seed(engine, settings.evidence_dir)
-    print(f"Done. Evidence files in {settings.evidence_dir.resolve()}")
+    store = default_store()
+    reset_and_seed(engine, store)
+    where = f"bucket {store.bucket!r}" if isinstance(store, SupabaseStore) else "?"
+    if isinstance(store, LocalStore):
+        where = str(store.root.resolve())
+    print(f"Done. Evidence files in {where}")
 
 
 if __name__ == "__main__":

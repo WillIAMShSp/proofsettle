@@ -18,6 +18,7 @@ from app.config import settings
 from app.db import SessionLocal, create_tables, engine, get_db
 from app.inspection import InspectionFailed
 from app.routes import router
+from app.storage import StorageError
 from app.workflow import TransitionError
 
 JSON_UTF8 = b"application/json; charset=utf-8"
@@ -92,6 +93,11 @@ def transition_error(_: Request, exc: TransitionError) -> JSONResponse:
 
 @app.exception_handler(InspectionFailed)
 def inspection_failed(_: Request, exc: InspectionFailed) -> JSONResponse:
+    return JSONResponse({"detail": str(exc)}, status_code=502)
+
+
+@app.exception_handler(StorageError)
+def storage_failed(_: Request, exc: StorageError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=502)
 
 
