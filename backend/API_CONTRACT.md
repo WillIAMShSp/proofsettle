@@ -578,39 +578,6 @@ detail's `evidence[].verified` shows it from then on. Any role.
   it is always `false` for now. Verification still succeeds on local hashes alone (PRD §9:
   the app must work without the blockchain).
 
-### Messages: Buyer ↔ Supplier chat (implemented)
-
-Each shipment has one conversation thread between its Buyer and Supplier. It is stored in
-`chat_messages` (`ChatMessage` in `backend/app/models.py`). Chat is **not** settlement
-state. Sending a message never changes a status or an amount, never appends an audit
-event, and is not hashed into the chain.
-
-Access follows shipment visibility. An account that gets `404` on `GET /shipments/{id}`
-also gets `404` here. Only `Buyer` and `Supplier` may send. A `Reviewer` who can see the
-shipment (Disputed or Resolved) can read the thread for context, and gets `403` on send.
-
-| Endpoint | Role | Body | Effect |
-|----------|------|------|--------|
-| `GET /shipments/{id}/messages` | any who can see the shipment | none | The thread, oldest first. |
-| `POST /shipments/{id}/messages` | Buyer, Supplier | `{ "body": "..." }` (trimmed, 1–2000 chars; unknown fields → `422`) | Appends one message. Returns `201` with the message. |
-
-```json
-{
-  "id": "msg_01",
-  "shipmentId": "PS-1042",
-  "at": "2026-10-18T09:30:00Z",
-  "authorRole": "Buyer",
-  "authorName": "Northgate Assembly Ltd",
-  "body": "Is #063 just glare from the lighting?",
-  "mine": true
-}
-```
-
-- `authorName` is the sender's profile name, or their role when the profile has none.
-- `mine` is computed for the caller: the message was sent by this account's user id.
-- The frontend polls `GET .../messages` every 4 s while the tab is visible.
-- `POST /dev/reset` deletes every message along with the other tables.
-
 ## Hashing (implemented: `backend/app/hashing.py`, `backend/app/audit.py`)
 
 ```

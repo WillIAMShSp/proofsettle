@@ -1,24 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, AlertTriangle, ShieldCheck, Scale, Send } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Check, AlertTriangle, ShieldCheck, Scale } from "lucide-react";
 import { Chip, ErrorNote, Notice, PickRole, TopBar, useStore } from "@/lib/store";
 import {
   ApiError,
-  MAX_MESSAGE_LENGTH,
   type EvidenceKind,
   type Finding,
   type FindingOutcome,
   type ShipmentDetail,
   type Status,
 } from "@/lib/api";
-import {
-  api,
-  useMessages,
-  useSendMessage,
-  useShipment,
-  useShipmentWrite,
-  useVerifyAudit,
-} from "@/lib/queries";
+import { api, useShipment, useShipmentWrite, useVerifyAudit } from "@/lib/queries";
 import { formatAt, short, unitShort, usd } from "@/lib/format";
 
 export const Route = createFileRoute("/shipments/$id")({
@@ -161,7 +153,6 @@ function ShipmentView({ s }: { s: ShipmentDetail }) {
       <InspectionSection s={s} />
       <AdjustmentSection s={s} />
       <DecisionSection s={s} />
-      <ChatSection s={s} />
       <AuditSection s={s} />
     </Page>
   );
@@ -699,129 +690,6 @@ function DecisionSection({ s }: { s: ShipmentDetail }) {
     <Section title="Decision">
       {body}
       <ErrorNote error={write.error} />
-    </Section>
-  );
-}
-
-// --- Messages ---------------------------------------------------------------------------
-
-function ChatSection({ s }: { s: ShipmentDetail }) {
-  const { role } = useStore();
-  const q = useMessages(s.id);
-  const send = useSendMessage(s.id);
-  const [draft, setDraft] = useState("");
-  const listRef = useRef<HTMLDivElement>(null);
-  const messages = q.data ?? [];
-  const canSend = role === "Buyer" || role === "Supplier";
-  const other = role === "Buyer" ? s.supplier : role === "Supplier" ? s.buyer : null;
-
-  // Keep the newest message in view as the thread grows.
-  useEffect(() => {
-    const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
-
-  const submit = () => {
-    const body = draft.trim();
-    if (!body || send.isPending) return;
-    send.mutate(body, { onSuccess: () => setDraft("") });
-  };
-
-  return (
-    <Section
-      title="Messages"
-      aside={
-        <span className="text-sm text-muted-foreground">
-          {other ? `With ${other}` : `${s.buyer} ↔ ${s.supplier}`}
-        </span>
-      }
-    >
-      <div
-        ref={listRef}
-        className="max-h-96 space-y-4 overflow-y-auto rounded-xl border p-4"
-        aria-live="polite"
-      >
-        {q.isError ? (
-          <p className="text-sm text-destructive">
-            {q.error.message}{" "}
-            <button onClick={() => q.refetch()} className="ml-2 text-primary">
-              Retry
-            </button>
-          </p>
-        ) : !q.data ? (
-          <p className="text-sm text-muted-foreground">Loading messages…</p>
-        ) : messages.length ? (
-          messages.map((m) => (
-            <div key={m.id} className={`flex ${m.mine ? "justify-end" : "justify-start"}`}>
-              <div className="max-w-[80%]">
-                <p
-                  className={`mb-1 text-xs text-muted-foreground ${m.mine ? "text-right" : "text-left"}`}
-                >
-                  {m.mine ? "You" : m.authorName}
-                  {m.authorName !== m.authorRole && !m.mine && ` · ${m.authorRole}`} ·{" "}
-                  {formatAt(m.at)}
-                </p>
-                <p
-                  className={`whitespace-pre-wrap break-words rounded-2xl border px-4 py-2.5 text-sm ${
-                    m.mine ? "border-primary/40 bg-primary/10" : "bg-muted/40"
-                  }`}
-                >
-                  {m.body}
-                </p>
-              </div>
-            </div>
-          ))
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No messages yet.
-            {canSend && " Questions about the terms, evidence or adjustment can go here."}
-          </p>
-        )}
-      </div>
-
-      {canSend ? (
-        <form
-          className="mt-4 flex items-end gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-        >
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter sends, Shift+Enter starts a new line.
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            rows={2}
-            maxLength={MAX_MESSAGE_LENGTH}
-            placeholder={`Message ${other}…`}
-            aria-label="Message"
-            className="min-w-0 flex-1 resize-none rounded-xl border bg-background p-3 text-sm outline-none focus:border-primary/60"
-          />
-          <button
-            type="submit"
-            disabled={!draft.trim() || send.isPending}
-            className="flex items-center gap-2 rounded-full bg-sol px-5 py-2.5 text-sm font-medium text-background hover:opacity-90 disabled:opacity-40"
-          >
-            <Send className="h-4 w-4" />
-            {send.isPending ? "Sending…" : "Send"}
-          </button>
-        </form>
-      ) : (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Reviewers can read this thread for context but don't take part in it.
-        </p>
-      )}
-      <ErrorNote error={send.error} />
-      <p className="mt-4 text-xs text-muted-foreground">
-        Messages are a conversation, not evidence. They don't change the agreement, the adjustment
-        or the audit trail.
-      </p>
     </Section>
   );
 }
