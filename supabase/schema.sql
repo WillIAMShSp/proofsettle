@@ -8,10 +8,13 @@
 create extension if not exists "uuid-ossp";
 
 do $$ begin
-  create type user_role as enum ('Buyer', 'Supplier', 'Auditor');
+  create type user_role as enum ('Buyer', 'Supplier', 'Auditor', 'Reviewer');
 exception
   when duplicate_object then null;
 end $$;
+
+-- Existing databases created the enum without Reviewer. The API accepts this value.
+alter type user_role add value if not exists 'Reviewer';
 
 do $$ begin
   create type shipment_status as enum (
