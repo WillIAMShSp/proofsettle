@@ -1,5 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Check, Scale } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  FileCheck2,
+  Fingerprint,
+  Scale,
+  ScanEye,
+  ShieldCheck,
+} from "lucide-react";
+import { useEffect, useRef } from "react";
 import { Chip, Logo } from "@/lib/store";
 
 export const Route = createFileRoute("/")({
@@ -20,16 +29,6 @@ export const Route = createFileRoute("/")({
   }),
   component: Landing,
 });
-
-const steps = [
-  ["01", "Agree", "Buyer and supplier sign off on terms and credit rules before anything ships."],
-  [
-    "02",
-    "Inspect",
-    "Dispatch and receipt photos are hashed. AI flags possible defects for review.",
-  ],
-  ["03", "Settle", "The agreement rule calculates the adjustment. Both parties accept or dispute."],
-];
 
 const progress = ["Draft", "Agreed", "In Transit", "Inspection", "Proposed", "Accepted"];
 
@@ -75,7 +74,12 @@ function ProductPreview() {
           <div className="flex gap-1.5">
             {progress.map((label, i) => (
               <div key={label} className="min-w-0 flex-1">
-                <div className={`h-1 rounded-full ${i < 5 ? "bg-sol" : "bg-muted"}`} />
+                <div
+                  className={`shipment-progress-segment h-1 rounded-full ${
+                    i < 5 ? "shipment-progress-active bg-sol" : "bg-muted"
+                  } ${i === 4 ? "shipment-progress-current" : ""}`}
+                  style={{ animationDelay: `${i * 360}ms` }}
+                />
                 <p
                   className={`mt-2 hidden whitespace-nowrap text-[10px] leading-none sm:block ${i === 4 ? "text-foreground" : "text-muted-foreground"}`}
                 >
@@ -129,10 +133,68 @@ function ProductPreview() {
   );
 }
 
+function useScrollReveals() {
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const items = [...root.querySelectorAll<HTMLElement>("[data-reveal]")];
+    const revealVisible = () => {
+      for (const item of items) {
+        const rect = item.getBoundingClientRect();
+        if (rect.top >= window.innerHeight * 0.9 || rect.bottom <= 0) continue;
+        item.classList.add("is-revealed");
+      }
+    };
+
+    revealVisible();
+    window.addEventListener("scroll", revealVisible, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", revealVisible);
+    };
+  }, []);
+
+  return rootRef;
+}
+
+function CursorGlow() {
+  const glowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (window.matchMedia("(pointer: coarse), (prefers-reduced-motion: reduce)").matches) return;
+
+    const glow = glowRef.current;
+    if (!glow) return;
+
+    const move = (event: PointerEvent) => {
+      glow.style.transform = `translate3d(${event.clientX}px, ${event.clientY}px, 0) translate(-50%, -50%)`;
+      glow.style.opacity = "1";
+    };
+    const leave = () => {
+      glow.style.opacity = "0";
+    };
+
+    window.addEventListener("pointermove", move, { passive: true });
+    document.documentElement.addEventListener("pointerleave", leave);
+
+    return () => {
+      window.removeEventListener("pointermove", move);
+      document.documentElement.removeEventListener("pointerleave", leave);
+    };
+  }, []);
+
+  return <div ref={glowRef} aria-hidden="true" className="cursor-glow" />;
+}
+
 function Landing() {
+  const revealRef = useScrollReveals();
+
   return (
-    <div className="relative min-h-screen">
+    <div ref={revealRef} className="relative min-h-screen overflow-x-clip">
       <div className="hero-atmosphere pointer-events-none absolute inset-x-0 top-0 h-svh" />
+      <CursorGlow />
 
       <nav className="relative z-10 mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
         <Logo />
@@ -160,7 +222,7 @@ function Landing() {
       </nav>
 
       <section className="relative z-10 mx-auto grid min-h-[calc(100svh-4rem)] max-w-6xl items-center gap-14 px-6 pb-16 pt-8 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-12 lg:pb-20">
-        <div className="fade-up">
+        <div className="hero-copy-enter">
           <p className="inline-flex items-center gap-2 rounded-full border bg-card/80 px-3 py-1 text-xs text-muted-foreground">
             <span className="h-1.5 w-1.5 rounded-full bg-sol" />
             B2B settlement for industrial supply
@@ -190,51 +252,194 @@ function Landing() {
               How it works
             </button>
           </div>
-          <div className="mt-12 flex gap-8 sm:gap-10">
-            <div>
-              <p className="text-2xl font-semibold tracking-tight">−$300</p>
-              <p className="mt-1 max-w-[10rem] text-xs leading-relaxed text-muted-foreground">
-                Proposed from the signed credit rule
-              </p>
-            </div>
-            <div className="w-px self-stretch bg-border" />
-            <div>
-              <p className="text-2xl font-semibold tracking-tight">3</p>
-              <p className="mt-1 max-w-[10rem] text-xs leading-relaxed text-muted-foreground">
-                Defects flagged on shipment PS-1042
-              </p>
-            </div>
-          </div>
         </div>
 
-        <div className="relative fade-up" style={{ animationDelay: "120ms" }}>
+        <div className="relative hero-preview-enter">
           <div className="absolute -inset-8 -z-10 rounded-[2.5rem] bg-primary/20 blur-3xl" />
           <div className="absolute -bottom-6 -right-2 -z-10 h-40 w-40 rounded-full bg-success/15 blur-3xl" />
-          <div className="rounded-[1.85rem] border bg-card/60 p-2.5 sm:p-3">
+          <div className="preview-float rounded-[1.85rem] border bg-card/60 p-2.5 sm:p-3">
             <ProductPreview />
           </div>
         </div>
       </section>
 
-      <section id="how-it-works" className="relative z-10 mx-auto max-w-6xl scroll-mt-8 px-6 pb-24">
-        <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <h2 className="text-2xl font-semibold tracking-tight">Agree, inspect, settle</h2>
-          <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
-            The model can flag a photo. Only the agreement both sides signed can change the payment.
-          </p>
-        </div>
-        <div className="grid overflow-hidden rounded-2xl border bg-card/40 md:grid-cols-3">
-          {steps.map(([n, title, detail], i) => (
-            <div
-              key={title}
-              className="border-b p-7 last:border-b-0 fade-up md:border-r md:border-b-0 md:last:border-r-0"
-              style={{ animationDelay: `${i * 80}ms` }}
-            >
-              <span className="font-mono text-xs text-muted-foreground">{n}</span>
-              <h3 className="mt-4 text-xl font-semibold">{title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{detail}</p>
+      <section
+        aria-labelledby="onchain-title"
+        className="relative z-10 mx-auto max-w-6xl px-6 pb-20"
+      >
+        <div className="relative overflow-hidden rounded-3xl border bg-card/55 p-6 sm:p-10">
+          <div className="pointer-events-none absolute -right-20 -top-28 h-72 w-72 rounded-full bg-primary/15 blur-3xl" />
+          <div className="relative grid items-center gap-10 lg:grid-cols-[1fr_0.9fr] lg:gap-16">
+            <div data-reveal="left">
+              <span className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-[11px] font-medium tracking-wide text-primary">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                BUILT WITH SOLANA
+              </span>
+              <h2
+                id="onchain-title"
+                className="mt-5 max-w-lg text-3xl font-semibold leading-tight tracking-tight sm:text-4xl"
+              >
+                Keep the documents private.{" "}
+                <span className="text-sol">Put the proof on-chain.</span>
+              </h2>
+              <p className="mt-4 max-w-lg text-sm leading-relaxed text-muted-foreground sm:text-base">
+                When anchoring is enabled, shipment milestones and cryptographic fingerprints can be
+                checked against Solana—helping reveal if agreed terms or evidence were changed
+                later.
+              </p>
+              <div className="mt-6 inline-flex items-center gap-2 text-sm text-foreground/80">
+                <ShieldCheck className="h-4 w-4 text-success" />
+                Agreements and photos stay off-chain.
+              </div>
             </div>
-          ))}
+
+            <div
+              aria-label="Illustration of agreement and evidence fingerprints anchored to Solana"
+              className="relative rounded-2xl border bg-background/80 p-4 sm:p-5"
+              data-reveal="right"
+              style={{ animationDelay: "120ms" }}
+            >
+              <div className="mb-5 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Shipment proof</p>
+                  <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                    PS-1042 · illustrative
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/5 px-2.5 py-1 text-[10px] text-success">
+                  <ShieldCheck className="h-3 w-3" />
+                  VERIFIABLE
+                </span>
+              </div>
+              <div className="relative">
+                <div
+                  className="relative flex items-center gap-3 rounded-xl border bg-card p-3"
+                  data-reveal="up"
+                  style={{ animationDelay: "100ms" }}
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                    <FileCheck2 className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium">Agreed terms</p>
+                    <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                      SHA-256 · 8c2a…71f4
+                    </p>
+                  </div>
+                  <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+                <div
+                  aria-hidden="true"
+                  className="ml-[28.5px] h-3 w-px bg-gradient-to-b from-primary/60 to-primary/30"
+                />
+                <div
+                  className="relative flex items-center gap-3 rounded-xl border bg-card p-3"
+                  data-reveal="up"
+                  style={{ animationDelay: "220ms" }}
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                    <Fingerprint className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium">Evidence fingerprint</p>
+                    <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                      SHA-256 · 14d9…a630
+                    </p>
+                  </div>
+                  <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+                <div
+                  aria-hidden="true"
+                  className="ml-[28.5px] h-3 w-px bg-gradient-to-b from-primary/30 to-success/60"
+                />
+                <div
+                  className="relative flex items-center gap-3 rounded-xl border border-success/25 bg-success/5 p-3"
+                  data-reveal="up"
+                  style={{ animationDelay: "340ms" }}
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-success/25 bg-success/10 text-success">
+                    <ShieldCheck className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium">Solana audit record</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      Milestones ready for verification
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-success/25 px-2 py-0.5 text-[9px] text-success">
+                    ON-CHAIN
+                  </span>
+                </div>
+              </div>
+              <p className="mt-4 text-center text-[10px] text-muted-foreground">
+                Anchoring is optional and depends on deployment configuration.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="how-it-works"
+        aria-label="A clearer way to settle"
+        className="relative z-10 mx-auto max-w-6xl scroll-mt-8 px-6 pb-20 pt-8"
+      >
+        <div className="rounded-3xl border bg-card/55 p-6 sm:p-8">
+          <div className="mb-6">
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
+              Settlement without surprises
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight sm:text-2xl">
+              Clarity for both sides.
+            </h2>
+          </div>
+          <div className="grid gap-6 sm:grid-cols-3 sm:gap-4">
+            <div
+              className="flex items-start gap-3"
+              data-reveal="left"
+              style={{ animationDelay: "80ms" }}
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
+                <FileCheck2 className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-medium">Agree before shipping</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Confirm terms and credit rules up front.
+                </p>
+              </div>
+            </div>
+            <div
+              className="flex items-start gap-3"
+              data-reveal="up"
+              style={{ animationDelay: "180ms" }}
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
+                <ScanEye className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-medium">Keep evidence in view</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Give both parties a shared, verifiable record.
+                </p>
+              </div>
+            </div>
+            <div
+              className="flex items-start gap-3"
+              data-reveal="right"
+              style={{ animationDelay: "280ms" }}
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-success/25 bg-success/10 text-success">
+                <Scale className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-medium">Settle by the rules</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Adjustments follow the agreement, not an AI guess.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
