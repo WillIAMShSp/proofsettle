@@ -88,6 +88,9 @@ class Shipment(Base):
     title: Mapped[str] = mapped_column(String(200))
     buyer: Mapped[str] = mapped_column(String(200))
     supplier: Mapped[str] = mapped_column(String(200))
+    # Auth user ids. Null on the shared demo seed. A real account only sees its own rows.
+    buyer_user_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    supplier_user_id: Mapped[str | None] = mapped_column(String(36), index=True)
     status: Mapped[Status] = mapped_column(_enum(Status, "shipment_status"))
     dispute_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())

@@ -60,6 +60,9 @@ create table if not exists public.profiles (
   created_at timestamptz default now()
 );
 
+-- Account privacy is supabase/auth.sql. This file does not enable row level security.
+-- Do not enable it on the other public tables from here: a policy-less enable hides every row.
+
 -- 3. SHIPMENTS
 create table if not exists public.shipments (
   id text primary key, -- e.g. 'PS-1042'

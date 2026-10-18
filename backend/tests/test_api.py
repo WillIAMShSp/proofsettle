@@ -308,3 +308,47 @@ def test_utf8_json_body_round_trips(client):
 
 def test_non_json_responses_keep_their_content_type(client):
     assert client.get("/evidence/ev_01/file").headers["content-type"] == "image/jpeg"
+
+
+def test_one_account_cannot_see_another_accounts_shipment(client):
+    from app.seed import PS_1042_TERMS
+
+    buyer_a = {"X-Demo-Role": "Buyer", "X-User-Id": "buyer-a", "X-User-Name": "Alex Vance"}
+    buyer_b = {"X-Demo-Role": "Buyer", "X-User-Id": "buyer-b", "X-User-Name": "Blair Cole"}
+    supplier = {
+        "X-Demo-Role": "Supplier",
+        "X-User-Id": "supplier-ferro",
+        "X-User-Name": "Ferro Precision Works",
+    }
+    other_supplier = {
+        "X-Demo-Role": "Supplier",
+        "X-User-Id": "supplier-other",
+        "X-User-Name": "Other Works",
+    }
+    created = client.post(
+        "/shipments",
+        headers=buyer_a,
+        json={
+            "title": "Private lot",
+            "supplier": "Ferro Precision Works",
+            "terms": PS_1042_TERMS.model_dump(mode="json"),
+        },
+    )
+    assert created.status_code == 201, created.text
+    shipment_id = created.json()["id"]
+    assert created.json()["buyer"] == "Alex Vance"
+
+    assert client.get(f"/shipments/{shipment_id}", headers=buyer_a).status_code == 200
+    assert shipment_id in {row["id"] for row in client.get("/shipments", headers=buyer_a).json()}
+    # The shared demo seed is not this account's data.
+    assert "PS-1042" not in {row["id"] for row in client.get("/shipments", headers=buyer_a).json()}
+
+    assert client.get(f"/shipments/{shipment_id}", headers=buyer_b).status_code == 404
+    assert shipment_id not in {row["id"] for row in client.get("/shipments", headers=buyer_b).json()}
+    hidden = client.post(f"/shipments/{shipment_id}/agreement/approve", headers=buyer_b)
+    assert hidden.status_code == 404
+
+    assert client.get(f"/shipments/{shipment_id}", headers=supplier).status_code == 200
+    assert client.get(f"/shipments/{shipment_id}", headers=other_supplier).status_code == 404
+    reviewer = {"X-Demo-Role": "Reviewer", "X-User-Id": "reviewer-1", "X-User-Name": "Riley"}
+    assert client.get(f"/shipments/{shipment_id}", headers=reviewer).status_code == 404

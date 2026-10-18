@@ -7,6 +7,7 @@ who that token is, then read `public.profiles.role` (Buyer, Supplier or Reviewer
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Annotated
 from uuid import UUID
@@ -28,6 +29,12 @@ ROLES = {
 }
 
 _PROFILE_SQL = text("SELECT CAST(role AS text) AS role FROM public.profiles WHERE id = :id")
+_PROFILE_ACCOUNT_SQL = text("SELECT CAST(role AS text) AS role, name FROM public.profiles WHERE id = :id")
+
+_NO_PROFILE = (
+    "No ProofSettle profile for this account. "
+    "If the row exists, Row Level Security on public.profiles is hiding it. Run supabase/auth.sql."
+)
 
 
 def actor_from_role(value: object) -> Actor:
@@ -75,28 +82,53 @@ def supabase_user_id(token: str) -> str:
     return user_id
 
 
-def _supabase_profile_role(user_id: str, token: str | None = None) -> Actor:
-    """Fetch user role from Supabase REST API when local DB does not have public.profiles."""
+class Account:
+    """One signed-in account. The role alone is not an account: every Buyer used to look the same."""
+
+    def __init__(self, role: Actor, user_id: str | None = None, name: str | None = None) -> None:
+        self.role = role
+        self.user_id = user_id
+        self.name = name
+
+
+def _profile_from_rest(user_id: str, token: str) -> tuple[Actor, str | None]:
+    """Role and name for this user, read as this user so another account's row is not returned.
+
+    The publishable key is only the apikey. It is not sent as the bearer: that key can read
+    every public.profiles row while row level security is off.
+    """
     if not settings.supabase_url or not settings.supabase_anon_key:
         raise HTTPException(503, "Could not read the user profile: Supabase auth is not configured")
-    url = f"{settings.supabase_url.rstrip('/')}/rest/v1/profiles?id=eq.{user_id}&select=role"
-    auth_header = f"Bearer {token}" if token else f"Bearer {settings.supabase_anon_key}"
-    req = urllib.request.Request(
+    url = (
+        settings.supabase_url.rstrip("/")
+        + "/rest/v1/profiles?id=eq."
+        + urllib.parse.quote(user_id)
+        + "&select=id,role,name"
+    )
+    request = urllib.request.Request(
         url,
-        headers={"apikey": settings.supabase_anon_key, "Authorization": auth_header},
+        headers={
+            "apikey": settings.supabase_anon_key,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
         method="GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode())
-    except HTTPException:
-        raise
+    except urllib.error.HTTPError as exc:
+        # HTTPError is a URLError. An empty or forbidden read is a missing profile, not an outage.
+        raise HTTPException(403, _NO_PROFILE) from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise HTTPException(503, "Could not read the user profile") from exc
-
-    if isinstance(payload, list) and len(payload) > 0 and isinstance(payload[0], dict):
-        return actor_from_role(payload[0].get("role"))
-    raise HTTPException(403, "No ProofSettle profile for this account")
+    if not isinstance(payload, list):
+        raise HTTPException(403, _NO_PROFILE)
+    rows = [row for row in payload if isinstance(row, dict) and row.get("id") == user_id]
+    if len(rows) != 1:
+        raise HTTPException(403, _NO_PROFILE)
+    name = rows[0].get("name")
+    return actor_from_role(rows[0].get("role")), name if isinstance(name, str) and name else None
 
 
 def profile_role(db: Session, user_id: str, token: str | None = None) -> Actor:
@@ -105,21 +137,34 @@ def profile_role(db: Session, user_id: str, token: str | None = None) -> Actor:
         row = db.execute(_PROFILE_SQL, {"id": user_id}).one_or_none()
     except SQLAlchemyError as exc:
         db.rollback()
-        # On SQLite / when public.profiles does not exist in local DB, fetch from Supabase REST API.
-        try:
-            return _supabase_profile_role(user_id, token)
-        except HTTPException:
-            raise
-        except Exception:
+        # SQLite has no public.profiles. Ask Supabase as this user, never as the anon key.
+        if not token:
             raise HTTPException(503, "Could not read the user profile") from exc
+        role, _name = _profile_from_rest(user_id, token)
+        return role
     if row is None:
         raise HTTPException(403, "No ProofSettle profile for this account")
     return actor_from_role(row[0])
 
 
+def load_account(db: Session, user_id: str, token: str) -> Account:
+    """The account behind this access token. Another user's profile is not a source for it."""
+    try:
+        row = db.execute(_PROFILE_ACCOUNT_SQL, {"id": user_id}).one_or_none()
+    except SQLAlchemyError:
+        db.rollback()
+        role, name = _profile_from_rest(user_id, token)
+        return Account(role, user_id, name)
+    if row is None:
+        role, name = _profile_from_rest(user_id, token)
+        return Account(role, user_id, name)
+    name = row[1] if isinstance(row[1], str) and row[1] else None
+    return Account(actor_from_role(row[0]), user_id, name)
+
+
 _Db = Annotated[Session, Depends(get_db)]
 
 
-def current_actor(db: _Db, authorization: Annotated[str | None, Header()] = None) -> Actor:
+def current_actor(db: _Db, authorization: Annotated[str | None, Header()] = None) -> Account:
     token = bearer_token(authorization)
-    return profile_role(db, supabase_user_id(token), token)
+    return load_account(db, supabase_user_id(token), token)

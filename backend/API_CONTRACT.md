@@ -38,12 +38,16 @@ their real SHA-256.
 - Hashes are **lowercase hex SHA-256** (64 chars). The frontend's `hashOf` is a fake
   FNV-based function that also yields 64 hex chars, so `short()` keeps working unchanged.
 - Caller identity is a Supabase access token: `Authorization: Bearer <token>`. The API
-  checks the token with Supabase Auth (`GET /auth/v1/user`) and reads
-  `public.profiles.role`, which must be `Buyer`, `Supplier` or `Reviewer` (`401` with no
-  or an invalid token, `403` when the profile is missing or has another role, `503` when
-  Auth or the profile table can't be reached). `X-Demo-Role` is ignored. `GET
-  /evidence/{id}/file` is exempt, because an `<img src>` can't send headers. `Reviewer`
-  resolves disputes and is included on the login screen.
+  checks the token with Supabase Auth (`GET /auth/v1/user`) and reads that user's
+  `public.profiles` row (role and name). The role must be `Buyer`, `Supplier` or
+  `Reviewer` (`401` with no or an invalid token, `403` when the profile is missing or
+  has another role, `503` when Auth or the profile table can't be reached). The user id
+  scopes shipments: a buyer sees shipments they created, a supplier sees shipments whose
+  supplier name is their profile name (or `supplier_user_id`), and a reviewer sees
+  Disputed and Resolved shipments that belong to an account. Another account's shipment
+  is `404`. `X-Demo-Role` is ignored. `GET /evidence/{id}/file` is exempt, because an
+  `<img src>` can't send headers. `Reviewer` resolves disputes and is included on the
+  login screen. `public.profiles` must not be world-readable; apply `supabase/auth.sql`.
 
 ## Types (verbatim from `src/lib/store.tsx`)
 

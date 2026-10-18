@@ -1,9 +1,12 @@
 """HTTP endpoints for the frontend (API_CONTRACT.md).
 
 Every /shipments and /findings route needs Authorization: Bearer <Supabase access token>.
-The token is verified with Supabase Auth and the caller's role is public.profiles.role
-(Buyer, Supplier or Reviewer), which decides the `actions` flags and is checked on every
-write. X-Demo-Role is ignored. GET /evidence/{id}/file does not require a token, because
+The token is verified with Supabase Auth. The caller's account is that user id plus
+public.profiles.role (Buyer, Supplier or Reviewer). The role decides the `actions` flags.
+The user id decides which shipments they can see: a Buyer sees shipments they created,
+a Supplier sees shipments addressed to their profile name, and a Reviewer sees disputes
+on accounts' shipments. The shared demo seed has no account id and is hidden from a real
+login. X-Demo-Role is ignored. GET /evidence/{id}/file does not require a token, because
 an <img src> can't send headers.
 
 Writes are thin: app.operations does the work through app.workflow / app.resolution, and
@@ -19,12 +22,12 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import AwareDatetime, StringConstraints
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import operations as ops
 from app.audit import ChainVerification, EventCheck, verify_chain
-from app.auth import current_actor
+from app.auth import Account, current_actor
 from app.config import settings
 from app.db import get_db
 from app.findings import Finding, ReviewOverride
@@ -50,7 +53,7 @@ def inspection_provider() -> InspectionProvider:
 
 
 Db = Annotated[Session, Depends(get_db)]
-Role = Annotated[Actor, Depends(current_actor)]
+Role = Annotated[Account, Depends(current_actor)]
 EvidenceRoot = Annotated[Path, Depends(evidence_dir)]
 Provider = Annotated[InspectionProvider, Depends(inspection_provider)]
 
@@ -225,7 +228,55 @@ def _actions(s: Shipment, role: Actor, live: Adjustment | None) -> Actions:
     )
 
 
-def _load(db: Session, shipment_id: str, *, lock: bool = False) -> Shipment:
+def _can_see(account: Account, shipment: Shipment) -> bool:
+    """True when this account may read or change the shipment.
+
+    No user id means the test double, which still sees every row. A real account does not
+    see another account's shipments. Unowned demo rows match a profile name only.
+    """
+    if account.user_id is None:
+        return True
+    if shipment.buyer_user_id == account.user_id or shipment.supplier_user_id == account.user_id:
+        return True
+    owned = shipment.buyer_user_id is not None or shipment.supplier_user_id is not None
+    if account.role is Actor.REVIEWER and owned and shipment.status in (Status.DISPUTED, Status.RESOLVED):
+        return True
+    buyer_name_match = (
+        account.name
+        and shipment.buyer_user_id is None
+        and account.role is Actor.BUYER
+        and shipment.buyer == account.name
+    )
+    if buyer_name_match:
+        return True
+    return bool(
+        account.name
+        and shipment.supplier_user_id is None
+        and account.role is Actor.SUPPLIER
+        and shipment.supplier == account.name
+    )
+
+
+def _visible(account: Account):
+    if account.user_id is None:
+        return None
+    clauses = [
+        Shipment.buyer_user_id == account.user_id,
+        Shipment.supplier_user_id == account.user_id,
+    ]
+    if account.role is Actor.REVIEWER:
+        clauses.append(
+            (Shipment.buyer_user_id.is_not(None) | Shipment.supplier_user_id.is_not(None))
+            & Shipment.status.in_((Status.DISPUTED, Status.RESOLVED))
+        )
+    if account.name and account.role is Actor.BUYER:
+        clauses.append((Shipment.buyer_user_id.is_(None)) & (Shipment.buyer == account.name))
+    if account.name and account.role is Actor.SUPPLIER:
+        clauses.append((Shipment.supplier_user_id.is_(None)) & (Shipment.supplier == account.name))
+    return or_(*clauses)
+
+
+def _load(db: Session, shipment_id: str, account: Account, *, lock: bool = False) -> Shipment:
     """The shipment with everything the detail needs, freshly read from the database.
 
     `lock` takes a row lock for a write (Postgres; SQLite serialises writers anyway), so two
@@ -244,7 +295,7 @@ def _load(db: Session, shipment_id: str, *, lock: bool = False) -> Shipment:
         .execution_options(populate_existing=True)
     )
     s = db.scalars(query.with_for_update() if lock else query).one_or_none()
-    if s is None:
+    if s is None or not _can_see(account, s):
         raise HTTPException(404, f"Unknown shipment {shipment_id}")
     return s
 
@@ -271,9 +322,9 @@ def _detail(s: Shipment, role: Actor) -> ShipmentDetail:
     )
 
 
-def _committed(db: Session, shipment_id: str, role: Actor) -> ShipmentDetail:
+def _committed(db: Session, shipment_id: str, account: Account) -> ShipmentDetail:
     db.commit()
-    return _detail(_load(db, shipment_id), role)
+    return _detail(_load(db, shipment_id, account), account.role)
 
 
 def _now() -> datetime:
@@ -294,19 +345,23 @@ def _read_image(f: UploadFile) -> ops.Upload:
 
 
 @router.get("/shipments")
-def list_shipments(db: Db, role: Role) -> list[ShipmentSummary]:
-    shipments = db.scalars(select(Shipment).options(selectinload(Shipment.agreement)).order_by(Shipment.id.desc()))
+def list_shipments(db: Db, account: Role) -> list[ShipmentSummary]:
+    query = select(Shipment).options(selectinload(Shipment.agreement)).order_by(Shipment.id.desc())
+    visible = _visible(account)
+    if visible is not None:
+        query = query.where(visible)
+    shipments = db.scalars(query)
     return [ShipmentSummary(**_summary_fields(s)) for s in shipments]
 
 
 @router.get("/shipments/{shipment_id}")
-def get_shipment(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
-    return _detail(_load(db, shipment_id), role)
+def get_shipment(shipment_id: str, db: Db, account: Role) -> ShipmentDetail:
+    return _detail(_load(db, shipment_id, account), account.role)
 
 
 @router.get("/shipments/{shipment_id}/audit")
-def get_audit(shipment_id: str, db: Db, role: Role) -> AuditOut:
-    s = _load(db, shipment_id)
+def get_audit(shipment_id: str, db: Db, account: Role) -> AuditOut:
+    s = _load(db, shipment_id, account)
     result: ChainVerification = verify_chain(db, s)
     return AuditOut(
         shipment_id=s.id,
@@ -332,30 +387,37 @@ def get_evidence_file(evidence_id: str, db: Db, root: EvidenceRoot) -> FileRespo
 
 
 @router.post("/shipments", status_code=201)
-def create_shipment(body: NewShipment, db: Db, role: Role) -> ShipmentDetail:
+def create_shipment(body: NewShipment, db: Db, account: Role) -> ShipmentDetail:
     s = ops.create_shipment(
-        db, role, title=body.title, buyer=BUYER, supplier=body.supplier, terms=body.terms, now=_now()
+        db,
+        account.role,
+        title=body.title,
+        buyer=account.name or BUYER,
+        supplier=body.supplier,
+        terms=body.terms,
+        now=_now(),
+        buyer_user_id=account.user_id,
     )
-    return _committed(db, s.id, role)
+    return _committed(db, s.id, account)
 
 
 @router.post("/shipments/{shipment_id}/agreement/approve")
-def approve_agreement(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
-    ops.approve_agreement(_load(db, shipment_id, lock=True), role, _now())
-    return _committed(db, shipment_id, role)
+def approve_agreement(shipment_id: str, db: Db, account: Role) -> ShipmentDetail:
+    ops.approve_agreement(_load(db, shipment_id, account, lock=True), account.role, _now())
+    return _committed(db, shipment_id, account)
 
 
 @router.post("/shipments/{shipment_id}/evidence")
 def upload_evidence(
-    shipment_id: str, db: Db, role: Role, root: EvidenceRoot, files: Annotated[list[UploadFile], File()]
+    shipment_id: str, db: Db, account: Role, root: EvidenceRoot, files: Annotated[list[UploadFile], File()]
 ) -> ShipmentDetail:
-    s = _load(db, shipment_id, lock=True)
-    ops.upload_slot(s, role)  # 403/409 before looking at the files
+    s = _load(db, shipment_id, account, lock=True)
+    ops.upload_slot(s, account.role)  # 403/409 before looking at the files
     if len(files) > settings.max_evidence_files:
         raise HTTPException(413, f"At most {settings.max_evidence_files} files per upload")
-    written = ops.add_evidence(s, role, [_read_image(f) for f in files], root, _now())
+    written = ops.add_evidence(s, account.role, [_read_image(f) for f in files], root, _now())
     try:
-        return _committed(db, shipment_id, role)
+        return _committed(db, shipment_id, account)
     except Exception:
         for path in written:
             path.unlink(missing_ok=True)
@@ -363,42 +425,45 @@ def upload_evidence(
 
 
 @router.post("/shipments/{shipment_id}/inspect")
-def inspect(shipment_id: str, db: Db, role: Role, root: EvidenceRoot, provider: Provider) -> ShipmentDetail:
-    ops.run_inspection(_load(db, shipment_id, lock=True), role, provider, root, _now())
-    return _committed(db, shipment_id, role)
+def inspect(shipment_id: str, db: Db, account: Role, root: EvidenceRoot, provider: Provider) -> ShipmentDetail:
+    ops.run_inspection(_load(db, shipment_id, account, lock=True), account.role, provider, root, _now())
+    return _committed(db, shipment_id, account)
 
 
 @router.post("/shipments/{shipment_id}/accept")
-def accept(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
-    ops.accept_adjustment(_load(db, shipment_id, lock=True), role, _now())
-    return _committed(db, shipment_id, role)
+def accept(shipment_id: str, db: Db, account: Role) -> ShipmentDetail:
+    ops.accept_adjustment(_load(db, shipment_id, account, lock=True), account.role, _now())
+    return _committed(db, shipment_id, account)
 
 
 @router.post("/shipments/{shipment_id}/dispute")
-def dispute(shipment_id: str, db: Db, role: Role, body: DisputeIn | None = None) -> ShipmentDetail:
-    ops.dispute_adjustment(_load(db, shipment_id, lock=True), role, body.reason if body else None, _now())
-    return _committed(db, shipment_id, role)
+def dispute(shipment_id: str, db: Db, account: Role, body: DisputeIn | None = None) -> ShipmentDetail:
+    ops.dispute_adjustment(_load(db, shipment_id, account, lock=True), account.role, body.reason if body else None, _now())
+    return _committed(db, shipment_id, account)
 
 
 @router.post("/findings/{finding_id}/review")
-def review_finding(finding_id: str, body: ReviewIn, db: Db, role: Role) -> ShipmentDetail:
+def review_finding(finding_id: str, body: ReviewIn, db: Db, account: Role) -> ShipmentDetail:
     row = db.get(FindingRow, finding_id)
     if row is None:
         raise HTTPException(404, f"Unknown finding {finding_id}")
-    s = _load(db, row.shipment_id, lock=True)
-    ops.review(s, row, role, body.decision, _now())
-    return _committed(db, s.id, role)
+    shipment = db.get(Shipment, row.shipment_id)
+    if shipment is None or not _can_see(account, shipment):
+        raise HTTPException(404, f"Unknown finding {finding_id}")
+    s = _load(db, row.shipment_id, account, lock=True)
+    ops.review(s, row, account.role, body.decision, _now())
+    return _committed(db, s.id, account)
 
 
 @router.post("/shipments/{shipment_id}/resolve")
-def resolve(shipment_id: str, db: Db, role: Role) -> ShipmentDetail:
-    ops.resolve_dispute(_load(db, shipment_id, lock=True), role, _now())
-    return _committed(db, shipment_id, role)
+def resolve(shipment_id: str, db: Db, account: Role) -> ShipmentDetail:
+    ops.resolve_dispute(_load(db, shipment_id, account, lock=True), account.role, _now())
+    return _committed(db, shipment_id, account)
 
 
 @router.post("/shipments/{shipment_id}/audit/verify")
-def verify_audit(shipment_id: str, db: Db, role: Role, root: EvidenceRoot) -> ops.Verification:
-    result = ops.verify(_load(db, shipment_id, lock=True), root, _now())
+def verify_audit(shipment_id: str, db: Db, account: Role, root: EvidenceRoot) -> ops.Verification:
+    result = ops.verify(_load(db, shipment_id, account, lock=True), root, _now())
     db.commit()  # each evidence item's `verified`
     return result
 

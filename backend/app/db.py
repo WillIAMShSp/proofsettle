@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.schema import CreateSchema
 
@@ -26,6 +26,19 @@ def make_engine(url: str) -> Engine:
     return engine
 
 
+def _ensure_account_columns(conn) -> None:
+    """Add account ids to shipments created before those columns existed."""
+    schema = POSTGRES_SCHEMA if conn.dialect.name == "postgresql" else None
+    tables = inspect(conn).get_table_names(schema=schema)
+    if "shipments" not in tables:
+        return
+    present = {column["name"] for column in inspect(conn).get_columns("shipments", schema=schema)}
+    prefix = f"{POSTGRES_SCHEMA}." if schema else ""
+    for name in ("buyer_user_id", "supplier_user_id"):
+        if name not in present:
+            conn.execute(text(f"ALTER TABLE {prefix}shipments ADD COLUMN {name} VARCHAR(36)"))
+
+
 def create_tables(engine: Engine) -> None:
     import app.models  # noqa: F401  (registers the tables on Base.metadata)
 
@@ -33,6 +46,7 @@ def create_tables(engine: Engine) -> None:
         if conn.dialect.name == "postgresql":
             conn.execute(CreateSchema(POSTGRES_SCHEMA, if_not_exists=True))
         Base.metadata.create_all(conn)
+        _ensure_account_columns(conn)
 
 
 def drop_tables(engine: Engine) -> None:

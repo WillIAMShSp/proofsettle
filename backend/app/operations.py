@@ -144,7 +144,15 @@ def _live_adjustment(s: Shipment) -> Adjustment:
 
 
 def create_shipment(
-    db: Session, actor: Actor, *, title: str, buyer: str, supplier: str, terms: AgreementTerms, now: datetime
+    db: Session,
+    actor: Actor,
+    *,
+    title: str,
+    buyer: str,
+    supplier: str,
+    terms: AgreementTerms,
+    now: datetime,
+    buyer_user_id: str | None = None,
 ) -> Shipment:
     """A new Draft shipment with its agreement terms. Buyer only; nobody has approved yet."""
     if actor is not Actor.BUYER:
@@ -156,6 +164,7 @@ def create_shipment(
         title=title,
         buyer=buyer,
         supplier=supplier,
+        buyer_user_id=buyer_user_id,
         status=Status.DRAFT,
         created_at=now,
     )

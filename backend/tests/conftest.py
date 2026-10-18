@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.auth import current_actor
+from app.auth import Account, current_actor
 from app.db import get_db, make_engine
 from app.main import app
 from app.routes import evidence_dir
@@ -16,11 +16,15 @@ from app.seed_db import reset_and_seed
 from app.workflow import Actor
 
 
-def test_actor(x_demo_role: Annotated[str | None, Header()] = None) -> Actor:
-    """Stand-in for Supabase login. Production `current_actor` never reads this header."""
+def test_actor(
+    x_demo_role: Annotated[str | None, Header()] = None,
+    x_user_id: Annotated[str | None, Header()] = None,
+    x_user_name: Annotated[str | None, Header()] = None,
+) -> Account:
+    """Stand-in for Supabase login. Production `current_actor` never reads these headers."""
     if x_demo_role not in {role.value for role in (Actor.BUYER, Actor.SUPPLIER, Actor.REVIEWER)}:
         raise HTTPException(400, "X-Demo-Role header must be Buyer, Supplier or Reviewer")
-    return Actor(x_demo_role)
+    return Account(Actor(x_demo_role), x_user_id, x_user_name)
 
 
 @pytest.fixture
